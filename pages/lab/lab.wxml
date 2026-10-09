@@ -17,6 +17,10 @@
       <view class="view-presets" wx:if="{{atlas && heartModel === 'atlas' && atlasReady}}">
         <view wx:for="{{presets}}" wx:key="id" class="preset {{item.id === preset ? 'selected' : ''}}" data-id="{{item.id}}" bindtap="setPreset">{{item.label}}</view>
       </view>
+      <view class="wall-overlay" wx:if="{{atlas && heartModel === 'atlas' && atlasReady}}">
+        <view class="wall-row"><text>{{t.wallOpacity}}</text><text class="out">{{wallOpacityText}}</text></view>
+        <slider class="wall-slider" min="0" max="1" step="0.05" value="{{wallOpacity}}" bindchanging="onWallOpacity" bindchange="onWallOpacity" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="14" block-color="#45c8f5"/>
+      </view>
       <view class="badge"><view class="live-dot"></view><text>{{currentPhase}}</text></view>
       <view class="model-switch">
         <view class="model-btn {{heartModel === 'atlas' ? 'on' : ''}}" data-model="atlas" bindtap="chooseModel">{{t.heartAtlas}}</view>
@@ -24,13 +28,14 @@
       </view>
       <view class="orientation"><text>R</text><text>↑ A</text><text>L</text></view>
     </view>
+    <view class="wall-note" wx:if="{{atlas && heartModel === 'atlas' && wallNote}}">{{t.wallOriginContext}}</view>
   </view>
 </template>
 
 <!-- Mirrors the phone layout of kuaiyu.site/cardiac_cycle (index.html), without outside links, brand header,
      intro lines, quiz or clinical-connection panel; the author line sits in the "?" dialog (owner's choices). -->
 <view class="page">
-  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, presets, preset, atlas: true, canvasId: 'heartDock'}}"/></view>
+  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
   <scroll-view scroll-y class="main" bindscroll="onScroll" enhanced show-scrollbar="{{false}}">
   <view class="top-row">
     <view class="mobile-panels">
@@ -82,12 +87,6 @@
       <canvas type="2d" id="strips" class="strips-canvas chart-canvas" bindtouchstart="stripStart" bindtouchmove="stripMove" bindtouchend="stripEnd"></canvas>
       <view class="sound-caption">{{soundCaption}}</view>
       <view class="text-button left" bindtap="readValues">{{t.readValues}}</view>
-    </view>
-
-    <view class="panel wall-panel" wx:if="{{heartModel === 'atlas' && atlasReady}}">
-      <view class="wall-row"><text>{{t.wallOpacity}}</text><text class="out">{{wallOpacityText}}</text></view>
-      <slider min="0" max="1" step="0.05" value="{{wallOpacity}}" bindchanging="onWallOpacity" bindchange="onWallOpacity" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
-      <view class="micro flush" wx:if="{{wallNote}}">{{t.wallOriginContext}}</view>
     </view>
 
     <view class="panel pv-panel">
