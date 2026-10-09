@@ -1,0 +1,198 @@
+<!-- The heart stage is drawn twice: inline in the scrolling page, and docked above it while pinned.
+     Canvases in WeChat ignore z-index/sticky stacking, so the docked copy sits outside the scroll area instead of over it. -->
+<template name="stage">
+  <view class="heart-stage">
+    <view class="heart-pin-bar">
+      <view class="pin-control" bindtap="togglePin">
+        <view class="switch {{pinned ? 'on' : ''}}"><view class="knob"></view></view>
+        <text class="pin-label">{{t.pinHeart}}</text>
+      </view>
+      <text class="pin-hint">{{t.pinHeartHint}}</text>
+    </view>
+    <view class="viewport">
+      <canvas wx:if="{{!(atlas && heartModel === 'atlas')}}" type="2d" id="{{canvasId}}" class="heart-canvas" bindtap="tapHeart"></canvas>
+      <!-- Realistic heart: only in the docked stage (one WebGL canvas, see pages/lab/lab.js syncDock). -->
+      <canvas wx:if="{{atlas && heartModel === 'atlas'}}" type="webgl2" id="atlas" class="heart-canvas" bindtouchstart="atlasTouch" bindtouchmove="atlasTouch" bindtouchend="atlasTouch" bindtouchcancel="atlasTouch"></canvas>
+      <view class="atlas-status" wx:if="{{atlas && heartModel === 'atlas' && atlasStatus}}">{{atlasStatus}}</view>
+      <view class="view-presets" wx:if="{{atlas && heartModel === 'atlas' && atlasReady}}">
+        <view wx:for="{{presets}}" wx:key="id" class="preset {{item.id === preset ? 'selected' : ''}}" data-id="{{item.id}}" bindtap="setPreset">{{item.label}}</view>
+      </view>
+      <view class="badge"><view class="live-dot"></view><text>{{currentPhase}}</text></view>
+      <view class="model-switch">
+        <view class="model-btn {{heartModel === 'atlas' ? 'on' : ''}}" data-model="atlas" bindtap="chooseModel">{{t.heartAtlas}}</view>
+        <view class="model-btn {{heartModel === '2d' ? 'on' : ''}}" data-model="2d" bindtap="chooseModel">{{t.heart2d}}</view>
+      </view>
+      <view class="orientation"><text>R</text><text>↑ A</text><text>L</text></view>
+    </view>
+  </view>
+</template>
+
+<!-- Mirrors the phone layout of kuaiyu.site/cardiac_cycle (index.html), without outside links, brand header,
+     intro lines, quiz or clinical-connection panel; the author line sits in the "?" dialog (owner's choices). -->
+<view class="page">
+  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, presets, preset, atlas: true, canvasId: 'heartDock'}}"/></view>
+  <scroll-view scroll-y class="main" bindscroll="onScroll" enhanced show-scrollbar="{{false}}">
+  <view class="top-row">
+    <view class="mobile-panels">
+      <view class="tab {{panel === 'heart' ? 'on' : ''}}" data-panel="heart" bindtap="setPanel">{{t.mobileHeart}}</view>
+      <view class="tab {{panel === 'phases' ? 'on' : ''}}" data-panel="phases" bindtap="setPanel">{{t.mobilePhases}}</view>
+    </view>
+    <view class="subtle-btn" bindtap="toggleLanguage">{{langButton}}</view>
+    <view class="help-btn" bindtap="openHelp">?</view>
+  </view>
+
+  <!-- Phases & values -->
+  <view class="left-rail" wx:if="{{panel === 'phases'}}">
+    <view class="panel span2">
+      <view class="panel-heading"><text class="h2">{{t.cyclePhases}}</text><text class="pill">{{phaseCount}}</text></view>
+      <view class="phases">
+        <view wx:for="{{phases}}" wx:key="index" class="phase-button {{item.index === phaseIndex ? 'current' : ''}} {{item.absent ? 'absent' : ''}}" data-index="{{item.index}}" bindtap="jumpPhase">
+          <text class="phase-index">{{item.no}}</text>
+          <view class="phase-text"><text class="phase-name">{{item.name}}</text><text class="phase-range">{{item.range}}</text></view>
+        </view>
+      </view>
+      <view class="notice" wx:if="{{diastasisGone}}">{{t.diastasisGone}}</view>
+    </view>
+    <view class="panel">
+      <view class="panel-heading"><text class="h2">{{t.liveValues}}</text><view class="live-dot"></view></view>
+      <view class="numbers">
+        <view class="number featured"><text class="n-label">{{t.lvPressure}}</text><text class="n-value">{{values.lvp}}</text><text class="n-unit">mmHg</text></view>
+        <view class="number"><text class="n-label">{{t.lvVolume}}</text><text class="n-value white">{{values.lvv}}</text><text class="n-unit">mL</text></view>
+        <view class="number"><text class="n-label">{{t.aorticPressure}}</text><text class="n-value white">{{values.aop}}</text><text class="n-unit">mmHg</text></view>
+        <view class="number"><text class="n-label">{{t.strokeVolume}}</text><text class="n-value white">{{values.sv}}</text><text class="n-unit">mL</text></view>
+        <view class="number"><text class="n-label">{{t.ef}}</text><text class="n-value white">{{values.ef}}</text><text class="n-unit">%</text></view>
+      </view>
+    </view>
+    <view class="panel">
+      <view class="panel-heading"><text class="h2">{{t.valveStates}}</text></view>
+      <view wx:for="{{valves}}" wx:key="id" class="valve-row"><text>{{item.name}}</text><text class="valve-state {{item.open ? 'open' : ''}}">{{item.state}}</text></view>
+      <view class="micro">{{t.valveHint}}</view>
+    </view>
+  </view>
+
+  <!-- Heart & traces: created only on this tab (canvases must not be hidden with CSS, see lab.js bindCanvas) -->
+  <view class="center" wx:if="{{panel === 'heart'}}">
+    <view class="stage-slot" wx:if="{{!docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlas: false, canvasId: 'heart'}}"/></view>
+
+    <view class="panel wiggers-panel">
+      <view class="panel-heading">
+        <view><text class="h2">{{t.wiggers}}</text></view>
+        <picker range="{{sides}}" value="{{sideIndex}}" bindchange="onSide"><view class="select small">{{sides[sideIndex]}} ▾</view></picker>
+      </view>
+      <canvas type="2d" id="strips" class="strips-canvas chart-canvas" bindtouchstart="stripStart" bindtouchmove="stripMove" bindtouchend="stripEnd"></canvas>
+      <view class="sound-caption">{{soundCaption}}</view>
+      <view class="text-button left" bindtap="readValues">{{t.readValues}}</view>
+    </view>
+
+    <view class="panel heart-tools">
+      <view class="color-safe" bindtap="toggleColorSafe"><view class="check {{colorSafe ? 'on' : ''}}">✓</view><text>{{t.colorSafe}}</text></view>
+      <view class="structure-control">
+        <text>{{t.structurePicker}}</text>
+        <picker class="grow" range="{{structures}}" range-key="label" value="{{structureIndex}}" bindchange="onStructure"><view class="select">{{structures[structureIndex].label}} ▾</view></picker>
+      </view>
+      <view class="inspector">
+        <view class="inspector-icon">↗</view>
+        <view class="grow">
+          <view class="structure-name">{{inspector ? inspector.name : t.inspectTitle}}</view>
+          <view class="structure-note">{{inspector ? inspector.note : t.inspectHint}}</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="panel pv-panel">
+      <view class="panel-heading">
+        <text class="h2">{{t.pvTitle}}</text>
+        <view class="legend"><view class="legend-dot"></view><text>LV</text>
+          <view class="inline-check" bindtap="toggleRelations"><view class="check {{relations ? 'on' : ''}}">✓</view><text>ESPVR / EDPVR</text></view>
+        </view>
+      </view>
+      <canvas type="2d" id="pv" class="pv-canvas chart-canvas"></canvas>
+      <view class="pv-controls">
+        <view class="pv-control">
+          <view class="pv-row"><text>{{t.preload}}</text><text class="out">{{modsText.preload}}</text></view>
+          <slider min="0.75" max="1.3" step="0.01" value="{{mods.preload}}" data-key="preload" bindchanging="onLoading" bindchange="onLoading" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+        </view>
+        <view class="pv-control">
+          <view class="pv-row"><text>{{t.afterload}}</text><text class="out">{{modsText.afterload}}</text></view>
+          <slider min="0.75" max="1.4" step="0.01" value="{{mods.afterload}}" data-key="afterload" bindchanging="onLoading" bindchange="onLoading" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+        </view>
+        <view class="pv-control">
+          <view class="pv-row"><text>{{t.contractility}}</text><text class="out">{{modsText.contractility}}</text></view>
+          <slider min="0.65" max="1.5" step="0.01" value="{{mods.contractility}}" data-key="contractility" bindchanging="onLoading" bindchange="onLoading" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+        </view>
+      </view>
+      <view class="text-button center-text" bindtap="resetLoads">{{t.resetLoads}}</view>
+    </view>
+
+    <view class="panel electrical">
+      <view class="panel-heading"><text class="h2">{{t.apTitle}}</text></view>
+      <view class="electrical-controls">
+        <view class="inline-check big" bindtap="toggleRepolarization"><view class="check {{repolarization ? 'on' : ''}}">✓</view><text>{{t.tWave}}</text></view>
+        <view class="inline-check big" bindtap="toggleErp"><view class="check {{erpOn ? 'on' : ''}}">✓</view><text>{{t.erp}}</text></view>
+      </view>
+      <canvas type="2d" id="ap" class="ap-canvas chart-canvas"></canvas>
+      <view class="education-note">{{t.electricalNote}}</view>
+    </view>
+  </view>
+
+    <view class="disclaimer">v{{version}}</view>
+  </scroll-view>
+
+  <view class="transport">
+    <view class="transport-top">
+      <view class="play-controls">
+        <view class="icon-btn" data-dir="-1" bindtap="stepPhase">|◀</view>
+        <view class="play-button" bindtap="togglePlay">{{playing ? 'Ⅱ' : '▶'}}</view>
+        <view class="icon-btn" data-dir="1" bindtap="stepPhase">▶|</view>
+      </view>
+      <view class="timeline">
+        <view class="time-row">
+          <text class="time">{{time}}<text class="time-s"> s</text></text>
+          <text class="cycle">/ {{cycle}} s</text>
+          <view class="loop" bindtap="toggleLoop"><view class="check {{loop ? 'on' : ''}}">✓</view><text>{{t.loop}}</text></view>
+        </view>
+        <slider class="scrub" min="0" max="{{scrubMax}}" step="1" value="{{scrub}}" bindchanging="onScrub" bindchange="onScrub" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+      </view>
+    </view>
+    <view class="transport-more">
+      <view class="speed-label"><text>{{t.speed}}</text>
+        <picker range="{{speedLabels}}" value="{{speedIndex}}" bindchange="onSpeed"><view class="select">{{speedLabels[speedIndex]}} ▾</view></picker>
+      </view>
+      <view class="hr-control">
+        <view class="hr-row"><text>{{t.heartRate}}</text><text class="hr-out">{{hr}} <text class="bpm">bpm</text></text></view>
+        <slider min="40" max="180" step="1" value="{{hr}}" bindchange="onHR" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+      </view>
+      <view class="scenario-control"><text>{{t.scenario}}</text>
+        <picker range="{{scenarioNames}}" value="{{scenarioIndex}}" bindchange="onScenario"><view class="select">{{scenarioNames[scenarioIndex]}} ▾</view></picker>
+      </view>
+    </view>
+  </view>
+
+
+  <!-- Dialogs -->
+  <view class="dialog-mask" wx:if="{{dialog}}" bindtap="closeDialog">
+    <view class="dialog" catchtap="noop">
+      <view class="dialog-heading">
+        <text class="h2 big">{{dialog === 'values' ? t.currentValues : t.welcome}}</text>
+        <view class="icon-btn" bindtap="closeDialog">×</view>
+      </view>
+      <scroll-view scroll-y class="dialog-body">
+        <block wx:if="{{dialog === 'values'}}">
+          <view class="micro flush">{{t.valuesHint}}</view>
+          <view wx:for="{{valueRows}}" wx:key="k" class="value-row"><text class="value-k">{{item.k}}</text><text class="value-v">{{item.v}}</text></view>
+        </block>
+        <block wx:else>
+          <view class="dialog-p">{{t.helpText}}</view>
+          <view class="notice flush">{{t.validationNote}}</view>
+          <view class="notice flush">{{t.motionNote}}</view>
+          <view class="author">
+            <view class="author-row"><text class="author-k">{{t.institution}}</text><text class="author-v" user-select>{{author.name}}</text></view>
+            <view class="author-row" data-copy="{{author.email}}" bindtap="copyText"><text class="author-k">{{t.authorEmail}}</text><text class="author-v link" user-select>{{author.email}}</text></view>
+            <view class="author-row" data-copy="{{author.site}}" bindtap="copyText"><text class="author-k">{{t.authorSite}}</text><text class="author-v link" user-select>{{author.site}}</text></view>
+            <view class="micro flush">{{t.copyHint}}</view>
+          </view>
+        </block>
+      </scroll-view>
+    </view>
+  </view>
+</view>

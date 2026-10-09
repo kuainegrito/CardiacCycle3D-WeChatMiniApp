@@ -1,0 +1,6 @@
+page {
+  background: #050b16;
+  color: #e9effa;
+  font-size: 13px;
+  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
