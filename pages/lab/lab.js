@@ -240,7 +240,9 @@ Page({
     if (!prepared) this.checkBeats();
     this.update(true);
   },
-  update(force = false) {
+  // force: refresh the readouts now. atlasForce: also step the 3D heart now
+  // instead of at its throttled rate (stepAtlas).
+  update(force = false, atlasForce = force) {
     const { model, clock } = this;
     // Identical beats are all drawn as beat 0: same result, and the engine's
     // per-beat caches (e.g. the atrial volume table) stay warm across beats.
@@ -253,7 +255,7 @@ Page({
     }
     const frame = { model, sample, t: clock.t, hr: clock.hr, beatIndex: beat, modifiers: this.modifiers, baseline };
     if (this.data.heartModel === "atlas") {
-      if (this.atlas) this.stepAtlas(frame, force);
+      if (this.atlas) this.stepAtlas(frame, atlasForce);
     } else if (this.painter && this.activeHeart()) {
       this.heart2d.setVisual({ colorSafe: this.data.colorSafe });
       this.heart2d.update(frame);
@@ -325,7 +327,7 @@ Page({
     const atlas = this.atlas, now = Date.now();
     atlas.setVisual({ colorSafe: this.data.colorSafe, repolarization: this.data.repolarization, erp: this.data.erpOn });
     if (this.atlasDragging && !force) return;
-    if (!force && this.clock.playing && now - (this.atlasStepAt ?? 0) < (this.atlasCost ?? 0) / 0.75) return;
+    if (!force && now - (this.atlasStepAt ?? 0) < (this.atlasCost ?? 0) / 0.75) return;
     atlas.update(frame);
     const cost = Date.now() - now;
     this.atlasCost = this.atlasCost === undefined ? cost : this.atlasCost * 0.8 + cost * 0.2;
@@ -629,16 +631,23 @@ Page({
     this.seekStrip(x);
   },
   stripEnd(e) {
-    if (this.drag && !this.drag.active) this.seekStrip(this.drag.startX);
+    if (this.drag && !this.drag.active) this.seekStrip(this.drag.startX, true);
+    else if (this.drag) this.update(true, true); // place the 3D heart exactly
     this.drag = null;
   },
-  seekStrip(x) {
+  seekStrip(x, final = false) {
     this.clock.playing = false;
     this.clock.seek(this.charts.timeAt(x));
-    this.update(true);
+    this.update(true, final);
   },
   toggleRelations() {
     this.setData({ relations: !this.data.relations }, () => this.update(true));
+  },
+  // While a load slider is dragged only its value label follows; the cycle
+  // (400 samples, new atrial tables, the 3D state) is recomputed once on
+  // release. Recomputing on every drag event froze phones.
+  onLoadingPreview(e) {
+    this.setData({ [`modsText.${e.currentTarget.dataset.key}`]: Number(e.detail.value).toFixed(2) + "×" });
   },
   onLoading(e) {
     const key = e.currentTarget.dataset.key, value = Number(e.detail.value);
@@ -681,10 +690,12 @@ Page({
     this.clock.stepPhase(Number(e.currentTarget.dataset.dir));
     this.update(true);
   },
+  // Dragging the timeline redraws the traces and 2D heart at once; the 3D
+  // heart follows at its own step rate and is placed exactly on release.
   onScrub(e) {
     this.clock.playing = false;
     this.clock.seek(Number(e.detail.value));
-    this.update(true);
+    this.update(true, e.type === "change");
   },
   toggleLoop() {
     this.clock.loop = !this.data.loop;
