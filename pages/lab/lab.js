@@ -546,6 +546,7 @@ Page({
       node.removeEventListener("pointerdown", view.handlePointerDown);
       node.removeEventListener("pointerup", view.handlePointerUp);
       view.setPreset(this.data.preset);
+      await this.warmAtlas(view);
       this.atlas = view;
       this.setData({ atlasReady: true, atlasStatus: "" });
       this.syncWall();
@@ -555,6 +556,31 @@ Page({
       this.atlasFailed(error);
     } finally {
       this.atlasStarting = false;
+    }
+  },
+  // The first motion steps build the engine's caches and the first renders
+  // compile shaders: seconds on a phone. Do that behind the loading message
+  // (rendering held), then start the step-rate budget from steady costs, so
+  // the heart appears already beating instead of freezing for a few seconds.
+  async warmAtlas(view) {
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 0));
+    view.holdFrame++; // AtlasLabView.render() draws nothing while held
+    try {
+      await Promise.resolve(view.layersReady).catch(() => {});
+      const { model, clock } = this, hr = clock.hr, T = model.cycleDuration(hr, 0), costs = [];
+      for (let k = 0; k < 6; k++) {
+        const t = (T * k) / 6, sample = model.sample(t, hr, this.modifiers, 0);
+        const start = Date.now();
+        view.update({ model, sample, t, hr, beatIndex: 0, modifiers: this.modifiers, baseline });
+        costs.push(Date.now() - start);
+        await pause();
+      }
+      await view.renderer.compileAsync(view.scene, view.camera).catch?.(() => {});
+      const steady = costs.slice(2).sort((a, b) => a - b);
+      this.atlasCost = steady[Math.floor(steady.length / 2)];
+      this.atlasStepAt = 0;
+    } finally {
+      view.holdFrame--;
     }
   },
   atlasFailed(error) {
