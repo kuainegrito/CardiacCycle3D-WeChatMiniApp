@@ -77,7 +77,7 @@ const TEXT_KEYS = [
   "mobileHeart", "mobilePhases", "pinHeart", "pinHeartHint",
   "heartAtlas", "heart2d", "cyclePhases", "liveValues", "lvPressure", "lvVolume", "aorticPressure",
   "strokeVolume", "ef", "valveStates", "valveHint", "diastasisGone", "wiggers", "cursorHint", "leftHeart",
-  "rightHeart", "readValues", "colorSafe", "structurePicker", "selectStructure", "inspectTitle", "inspectHint",
+  "rightHeart", "readValues",
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
   "atlasLoading", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
@@ -107,9 +107,6 @@ Page({
     relations: true,
     repolarization: false,
     erpOn: true,
-    structures: [],
-    structureIndex: 0,
-    inspector: null,
     mods: { preload: 1, afterload: 1, contractility: 1 },
     modsText: { preload: "1.00×", afterload: "1.00×", contractility: "1.00×" },
     scenarioNames: [],
@@ -149,11 +146,9 @@ Page({
       ...HEART_TEXT,
       language: i18n.language,
       readJSON: async () => atrialVolume,
-      onPick: (id, info) => this.showStructure(info),
     });
     this.heart2d.init().then(async () => {
       this.painter = new SvgPainter(this.host.children[0]);
-      this.setData({ structures: this.structureOptions() });
       await this.attachPanel();
       this.visible = true;
       this.restartLoop();
@@ -390,8 +385,6 @@ Page({
     if (this.heart2d) {
       this.heart2d.setLanguage(i18n.language);
       this.atlas?.translate();
-      this.setData({ structures: this.structureOptions() });
-      if (this.picked) this.showStructure(this.activeView().pickDetails(this.picked));
       this.rebuild();
       wx.nextTick?.(() => this.measureStage());
     }
@@ -492,7 +485,7 @@ Page({
     const heartModel = e.currentTarget.dataset.model;
     if (heartModel === this.data.heartModel || this.atlasStarting) return;
     if (heartModel === "2d") this.closeAtlas();
-    this.setData({ heartModel, structures: [], structureIndex: 0, inspector: null }, async () => {
+    this.setData({ heartModel }, async () => {
       if (heartModel === "atlas") {
         // From an undocked page the dock appears now; from a docked 2D heart
         // the dock's 2D canvas is replaced by the WebGL one.
@@ -503,7 +496,6 @@ Page({
         await this.syncDock();
         if (this.data.docked) await this.bindCanvas("heartDock");
       }
-      this.setData({ structures: this.structureOptions() });
       this.update(true);
       this.restartLoop();
     });
@@ -545,13 +537,15 @@ Page({
         i18n,
         readJSON: (name) => requestJSON(CONTENT_URL + name),
         glb: cachedDownload(GLB_URL),
-        onPick: (id, info) => this.showStructure(info),
         onGraphicsChange: (lost) => lost && this.atlasFailed(new Error("WebGL context lost")),
       });
       await view.init();
+      // No tap-to-select here: drop the website's picker, keep OrbitControls.
+      node.removeEventListener("pointerdown", view.handlePointerDown);
+      node.removeEventListener("pointerup", view.handlePointerUp);
       view.setPreset(this.data.preset);
       this.atlas = view;
-      this.setData({ atlasReady: true, atlasStatus: "", structures: this.structureOptions(), structureIndex: 0 });
+      this.setData({ atlasReady: true, atlasStatus: "" });
       this.syncWall();
       this.update(true);
       this.restartLoop();
@@ -582,11 +576,10 @@ Page({
     this.setData({ heartModel: "2d" }, async () => {
       await this.syncDock();
       if (this.data.docked) await this.bindCanvas("heartDock");
-      this.setData({ structures: this.structureOptions() });
       this.restartLoop();
     });
   },
-  // Touches on the WebGL canvas drive OrbitControls and the atlas picker.
+  // Touches on the WebGL canvas turn and zoom the heart (OrbitControls).
   atlasTouch(e) {
     const type = { touchstart: "pointerdown", touchmove: "pointermove", touchend: "pointerup", touchcancel: "pointercancel" }[e.type];
     this.atlasDragging = (e.touches?.length ?? 0) > 0;
@@ -617,43 +610,6 @@ Page({
       wallOpacityText: atlas.wallOpacity.toFixed(2),
       wallNote: !!contexts && [...contexts.values()].some((m) => m.visible),
     });
-  },
-  tapHeart(e) {
-    if (!this.painter) return;
-    const touch = e.changedTouches?.[0] ?? e.touches?.[0] ?? e.detail;
-    const target = this.canvases[e.currentTarget.id];
-    if (!target) return;
-    const { ctx, w, h } = target;
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); // same space as paintHeart
-    const id = this.painter.hitTest(ctx, { x: 0, y: 0, w, h }, devicePixelRatio, touch.x, touch.y);
-    if (id) this.heart2d.selectStructure(id);
-  },
-  activeView() {
-    return this.data.heartModel === "atlas" && this.atlas ? this.atlas : this.heart2d;
-  },
-  structureOptions() {
-    return [{ id: "", label: i18n.t("selectStructure") }, ...(this.activeView()?.structureOptions() ?? [])];
-  },
-  onStructure(e) {
-    const index = Number(e.detail.value), option = this.data.structures[index];
-    this.setData({ structureIndex: index });
-    if (option?.id) this.activeView().selectStructure(option.id);
-  },
-  showStructure(info) {
-    if (!info) return;
-    const id = info.id ?? info.structureId ?? info.name;
-    this.picked = id;
-    this.setData({
-      inspector: {
-        name: i18n.local(info.label ?? info.name) || id,
-        note: (i18n.local(info.note ?? info.description) || i18n.t("inspectHint")) + " · " + (info.phaseNote || i18n.local(this.sample?.phase?.name)),
-      },
-      structureIndex: Math.max(0, this.data.structures.findIndex((s) => s.id === id)),
-    });
-    this.update(true);
-  },
-  toggleColorSafe() {
-    this.setData({ colorSafe: !this.data.colorSafe }, () => this.update(true));
   },
 
   // ---- traces --------------------------------------------------------------

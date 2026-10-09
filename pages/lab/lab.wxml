@@ -10,7 +10,7 @@
       <text class="pin-hint">{{t.pinHeartHint}}</text>
     </view>
     <view class="viewport">
-      <canvas wx:if="{{!(atlas && heartModel === 'atlas')}}" type="2d" id="{{canvasId}}" class="heart-canvas" bindtap="tapHeart"></canvas>
+      <canvas wx:if="{{!(atlas && heartModel === 'atlas')}}" type="2d" id="{{canvasId}}" class="heart-canvas"></canvas>
       <!-- Realistic heart: only in the docked stage (one WebGL canvas, see pages/lab/lab.js syncDock). -->
       <canvas wx:if="{{atlas && heartModel === 'atlas'}}" type="webgl2" id="atlas" class="heart-canvas" bindtouchstart="atlasTouch" bindtouchmove="atlasTouch" bindtouchend="atlasTouch" bindtouchcancel="atlasTouch"></canvas>
       <view class="atlas-status" wx:if="{{atlas && heartModel === 'atlas' && atlasStatus}}">{{atlasStatus}}</view>

@@ -1,6 +1,5 @@
 // Paints the SVG tree that heart2d.js builds (mp-dom.js SvgElement objects) on
-// a canvas 2d context, and finds which structure a tap hits. Covers what that
-// drawing uses: path (M L H V C S Q T A Z), rect, ellipse, line, text, groups,
+// a canvas 2d context. Covers what that drawing uses: path (M L H V C S Q T A Z), rect, ellipse, line, text, groups,
 // translate/rotate/scale transforms, linear/radial gradients, opacity, dashes,
 // paint-order on text and feDropShadow (applied per shape).
 
@@ -274,30 +273,5 @@ export class SvgPainter {
     }
     ctx.fillStyle = style.fill ?? "#000";
     ctx.fillText(content, x, y);
-  }
-  // Which data-structure a tap at canvas CSS point (px, py) lands on (topmost).
-  hitTest(ctx, box, scale, px, py) {
-    // Re-run the painter with a shape step that only builds each path and
-    // tests it (isPointInPath takes device pixels, untransformed).
-    ctx.save();
-    const found = [];
-    const original = this.shape.bind(this);
-    this.shape = (c, node, style, op, shadow, structure) => {
-      if (node.tagName === "text") return;
-      const b = this.geometry(c, node);
-      if (!b || !structure || style["pointer-events"] === "none") return;
-      const X = px * scale, Y = py * scale;
-      const filled = (style.fill ?? "#000") !== "none" || style["pointer-events"] === "all";
-      const w = num(style["stroke-width"], 1);
-      if ((filled && c.isPointInPath(X, Y)) || (style.stroke && style.stroke !== "none" && (c.lineWidth = Math.max(w, 14), c.isPointInStroke?.(X, Y))))
-        found.push(structure);
-    };
-    try {
-      this.paint(ctx, box, scale);
-    } finally {
-      this.shape = original;
-      ctx.restore();
-    }
-    return found.length ? found[found.length - 1] : null;
   }
 }
