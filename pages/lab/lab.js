@@ -33,6 +33,12 @@ const OVERRIDES = {
     atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒",
     atlasFailed: "三维心脏模型载入失败，已改用二维心脏。",
     atlasPinned: "三维心脏始终固定在顶部",
+    atlasFailedTitle: "三维心脏载入失败",
+    atlasDomain: "无法连接 kuaiyu.site。真机预览请在小程序后台「开发管理 → 服务器域名」的 request 合法域名中加入 https://www.kuaiyu.site，或在右上角菜单中打开「开发调试」。",
+    atlasNetwork: "下载三维心脏模型失败，请检查网络后重试。",
+    atlasNoWebgl: "此设备的微信无法提供 WebGL2，暂时只能使用二维心脏。",
+    atlasLost: "图形环境被系统中断，请重试。",
+    reason: "原因",
     authorEmail: "邮箱",
     authorSite: "个人网站",
     copyHint: "点击复制邮箱或网址，也可长按选择文字。",
@@ -44,6 +50,12 @@ const OVERRIDES = {
     atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds",
     atlasFailed: "The 3D heart could not load; showing the 2D heart.",
     atlasPinned: "The 3D heart stays pinned",
+    atlasFailedTitle: "3D heart unavailable",
+    atlasDomain: "Cannot reach kuaiyu.site. For a phone preview, add https://www.kuaiyu.site to the request domains in the mini program console, or turn on debug mode from the top-right menu.",
+    atlasNetwork: "The 3D heart model could not be downloaded. Check the network and try again.",
+    atlasNoWebgl: "WeChat on this device has no WebGL2; only the 2D heart is available.",
+    atlasLost: "The graphics context was interrupted. Please try again.",
+    reason: "Reason",
     authorEmail: "Email",
     authorSite: "Website",
     copyHint: "Tap to copy the email or address, or long-press to select it.",
@@ -68,7 +80,7 @@ const TEXT_KEYS = [
   "rightHeart", "readValues", "colorSafe", "structurePicker", "selectStructure", "inspectTitle", "inspectHint",
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
-  "atlasLoading", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
+  "atlasLoading", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
 ];
 
 Page({
@@ -86,6 +98,9 @@ Page({
     atlasReady: false,
     presets: [],
     preset: "anatomy",
+    wallOpacity: 1,
+    wallOpacityText: "1.00",
+    wallNote: false,
     sideIndex: 0,
     sides: [],
     colorSafe: true,
@@ -494,10 +509,21 @@ Page({
     });
   },
   closeAtlas() {
-    try {
-      this.atlas?.dispose();
-    } catch (error) {
-      console.warn("Realistic heart dispose:", error);
+    // Release the GPU resources once every shader compile started by a preset
+    // has settled (AtlasLabView counts them in holdFrame; three.js polls them
+    // on a timer and would otherwise read freed programs). Gives up after 5 s.
+    const atlas = this.atlas;
+    if (atlas) {
+      const started = Date.now();
+      const release = () => {
+        if (atlas.holdFrame > 0 && Date.now() - started < 5000) return setTimeout(release, 50);
+        try {
+          atlas.dispose();
+        } catch (error) {
+          console.warn("3D heart dispose:", error);
+        }
+      };
+      release();
     }
     this.atlas = null;
     this.setData({ atlasReady: false, atlasStatus: "" });
@@ -526,6 +552,7 @@ Page({
       view.setPreset(this.data.preset);
       this.atlas = view;
       this.setData({ atlasReady: true, atlasStatus: "", structures: this.structureOptions(), structureIndex: 0 });
+      this.syncWall();
       this.update(true);
       this.restartLoop();
     } catch (error) {
@@ -535,7 +562,22 @@ Page({
     }
   },
   atlasFailed(error) {
-    console.error("Realistic heart unavailable:", error);
+    console.error("3D heart unavailable:", error);
+    const message = String(error?.message ?? error);
+    const why = /domain|合法域名|url not in/i.test(message)
+      ? i18n.t("atlasDomain")
+      : /webgl2|WebGL canvas/i.test(message)
+        ? i18n.t("atlasNoWebgl")
+        : /context lost/i.test(message)
+          ? i18n.t("atlasLost")
+          : /request|HTTP|timeout|fail/i.test(message)
+            ? i18n.t("atlasNetwork")
+            : "";
+    wx.showModal({
+      title: i18n.t("atlasFailedTitle"),
+      content: i18n.t("atlasFailed") + "\n\n" + (why ? why + "\n\n" : "") + i18n.t("reason") + ": " + message.slice(0, 160),
+      showCancel: false,
+    });
     this.closeAtlas();
     this.setData({ heartModel: "2d" }, async () => {
       await this.syncDock();
@@ -543,7 +585,6 @@ Page({
       this.setData({ structures: this.structureOptions() });
       this.restartLoop();
     });
-    wx.showToast({ title: i18n.t("atlasFailed"), icon: "none", duration: 3000 });
   },
   // Touches on the WebGL canvas drive OrbitControls and the atlas picker.
   atlasTouch(e) {
@@ -556,7 +597,26 @@ Page({
     const preset = e.currentTarget.dataset.id;
     this.setData({ preset });
     this.atlas?.setPreset(preset);
+    this.syncWall();
     this.update(true);
+  },
+  // Chamber-wall opacity (the website's atlas-wall-opacity slider); a value
+  // that matches no preset turns the preset buttons off ("custom").
+  onWallOpacity(e) {
+    if (!this.atlas) return;
+    this.atlas.setWallOpacity(Number(e.detail.value));
+    this.syncWall();
+  },
+  syncWall() {
+    const atlas = this.atlas;
+    if (!atlas) return;
+    const contexts = atlas.motion?.chordWallInsertions?.contexts;
+    this.setData({
+      preset: atlas.preset,
+      wallOpacity: atlas.wallOpacity,
+      wallOpacityText: atlas.wallOpacity.toFixed(2),
+      wallNote: !!contexts && [...contexts.values()].some((m) => m.visible),
+    });
   },
   tapHeart(e) {
     if (!this.painter) return;
@@ -708,21 +768,28 @@ function requestJSON(url) {
 function cachedDownload(url) {
   const fs = wx.getFileSystemManager(),
     path = wx.env.USER_DATA_PATH + "/" + url.split("/").pop();
-  return new Promise((resolve, reject) =>
+  const complete = (data) => {
+    if (!(data instanceof ArrayBuffer) || data.byteLength < 12) return false;
+    const head = new DataView(data); // GLB header: "glTF", version, total length
+    return head.getUint32(0, true) === 0x46546c67 && head.getUint32(8, true) === data.byteLength;
+  };
+  return new Promise((resolve, reject) => {
+    const download = () =>
+      wx.request({
+        url,
+        responseType: "arraybuffer",
+        success: (res) => {
+          if (res.statusCode !== 200) return reject(new Error(url + ": HTTP " + res.statusCode));
+          if (!complete(res.data)) return reject(new Error(url + ": incomplete download"));
+          fs.writeFile({ filePath: path, data: res.data, fail: () => {} });
+          resolve(res.data);
+        },
+        fail: (err) => reject(new Error(url + ": " + err.errMsg)),
+      });
     fs.readFile({
       filePath: path,
-      success: (r) => resolve(r.data),
-      fail: () =>
-        wx.request({
-          url,
-          responseType: "arraybuffer",
-          success: (res) => {
-            if (res.statusCode !== 200) return reject(new Error(url + ": HTTP " + res.statusCode));
-            fs.writeFile({ filePath: path, data: res.data, fail: () => {} });
-            resolve(res.data);
-          },
-          fail: (err) => reject(new Error(url + ": " + err.errMsg)),
-        }),
-    }),
-  );
+      success: (r) => (complete(r.data) ? resolve(r.data) : fs.unlink({ filePath: path, complete: download })),
+      fail: download,
+    });
+  });
 }

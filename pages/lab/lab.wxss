@@ -92,6 +92,9 @@
 .inspector-icon { width: 27px; height: 27px; line-height: 27px; text-align: center; color: #45c8f5; background: rgba(69,200,245,0.12); border-radius: 6px; flex: none; }
 .structure-name { font-size: 11px; font-weight: 700; }
 .structure-note { font-size: 10px; color: #94a5bf; margin-top: 4px; line-height: 16px; }
+.wall-panel { padding: 12px 16px; }
+.wall-row { display: flex; justify-content: space-between; font-size: 12px; }
+.wall-panel slider { margin: 8px 4px 4px; }
 .legend { display: flex; align-items: center; gap: 5px; font-size: 9px; color: #94a5bf; }
 .legend-dot { width: 6px; height: 6px; border-radius: 50%; background: #45c8f5; }
 .inline-check { display: flex; align-items: center; gap: 5px; margin-left: 8px; }

@@ -84,6 +84,12 @@
       <view class="text-button left" bindtap="readValues">{{t.readValues}}</view>
     </view>
 
+    <view class="panel wall-panel" wx:if="{{heartModel === 'atlas' && atlasReady}}">
+      <view class="wall-row"><text>{{t.wallOpacity}}</text><text class="out">{{wallOpacityText}}</text></view>
+      <slider min="0" max="1" step="0.05" value="{{wallOpacity}}" bindchanging="onWallOpacity" bindchange="onWallOpacity" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="18" block-color="#45c8f5"/>
+      <view class="micro flush" wx:if="{{wallNote}}">{{t.wallOriginContext}}</view>
+    </view>
+
     <view class="panel pv-panel">
       <view class="panel-heading">
         <text class="h2">{{t.pvTitle}}</text>
