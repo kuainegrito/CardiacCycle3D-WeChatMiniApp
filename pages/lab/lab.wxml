@@ -84,21 +84,6 @@
       <view class="text-button left" bindtap="readValues">{{t.readValues}}</view>
     </view>
 
-    <view class="panel heart-tools">
-      <view class="color-safe" bindtap="toggleColorSafe"><view class="check {{colorSafe ? 'on' : ''}}">✓</view><text>{{t.colorSafe}}</text></view>
-      <view class="structure-control">
-        <text>{{t.structurePicker}}</text>
-        <picker class="grow" range="{{structures}}" range-key="label" value="{{structureIndex}}" bindchange="onStructure"><view class="select">{{structures[structureIndex].label}} ▾</view></picker>
-      </view>
-      <view class="inspector">
-        <view class="inspector-icon">↗</view>
-        <view class="grow">
-          <view class="structure-name">{{inspector ? inspector.name : t.inspectTitle}}</view>
-          <view class="structure-note">{{inspector ? inspector.note : t.inspectHint}}</view>
-        </view>
-      </view>
-    </view>
-
     <view class="panel pv-panel">
       <view class="panel-heading">
         <text class="h2">{{t.pvTitle}}</text>
