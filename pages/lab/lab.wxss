@@ -76,7 +76,7 @@
 .model-switch { position: absolute; top: 51px; left: 12px; display: flex; flex-direction: column; gap: 3px; padding: 3px; background: rgba(8,18,34,0.8); border: 1px solid rgba(120,168,226,0.32); border-radius: 12px; }
 .model-btn { font-size: 10px; color: #94a5bf; padding: 6px 10px; border-radius: 999px; text-align: center; }
 .model-btn.on { color: #04121f; font-weight: 700; background: linear-gradient(120deg, #45c8f5, #4f7cff); box-shadow: 0 0 16px rgba(69,200,245,0.3); }
-.atlas-status { position: absolute; left: 0; right: 0; bottom: 40px; text-align: center; font-size: 11px; color: #94a5bf; }
+.atlas-status { position: absolute; left: 96px; right: 70px; top: 50%; transform: translateY(-50%); text-align: center; font-size: 11px; line-height: 18px; color: #c7d6ea; white-space: pre-line; padding: 10px 12px; border-radius: 10px; background: rgba(8,18,34,0.85); border: 1px solid rgba(120,168,226,0.32); }
 .view-presets { position: absolute; top: 52px; right: 10px; display: flex; flex-direction: column; gap: 4px; }
 .preset { font-size: 10px; padding: 5px 9px; border-radius: 999px; color: #94a5bf; background: rgba(8,18,34,0.8); border: 1px solid rgba(120,168,226,0.32); text-align: center; }
 .preset.selected { color: #04121f; font-weight: 700; background: linear-gradient(120deg, #45c8f5, #4f7cff); border-color: transparent; }

@@ -30,7 +30,7 @@ const AUTHOR = { name: "于快", email: "yukuai@gmc.edu.cn", site: "https://www.
 const OVERRIDES = {
   zh: {
     heartAtlas: "三维心脏",
-    atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒",
+    atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒\n载入后：单指拖动旋转心脏；双指捏合缩放，双指同时拖动可平移心脏。",
     atlasFailed: "三维心脏模型载入失败，已改用二维心脏。",
     atlasPinned: "三维心脏始终固定在顶部",
     atlasFailedTitle: "三维心脏载入失败",
@@ -47,7 +47,7 @@ const OVERRIDES = {
   },
   en: {
     heartAtlas: "3D heart",
-    atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds",
+    atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds\nThen: drag with one finger to turn the heart; pinch with two fingers to zoom, and drag with two fingers to move it.",
     atlasFailed: "The 3D heart could not load; showing the 2D heart.",
     atlasPinned: "The 3D heart stays pinned",
     atlasFailedTitle: "3D heart unavailable",
