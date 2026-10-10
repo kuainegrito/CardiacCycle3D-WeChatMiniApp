@@ -32,6 +32,15 @@ const OVERRIDES = {
     heartAtlas: "三维心脏",
     atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒\n载入后：单指拖动旋转心脏；双指捏合缩放，双指同时拖动可平移心脏。",
     atlasFailed: "三维心脏模型载入失败，已改用二维心脏。",
+    loadTitle: "正在载入三维心脏",
+    loadWait: "约 10~30 秒",
+    "load.glb": "下载心脏模型（2.3 MB）",
+    "load.glbCached": "读取心脏模型（本机已缓存）",
+    "load.engine": "载入三维引擎",
+    "load.build": "构建三维心脏",
+    "load.warm": "预热，让心脏一出现就在跳",
+    loadSlow: "网络较慢时，可先点左侧「二维心脏」；模型会在后台继续下载，之后再切回「三维心脏」即可。",
+    loadTip: "小知识",
     atlasPinned: "三维心脏始终固定在顶部",
     atlasFailedTitle: "三维心脏载入失败",
     atlasDomain: "无法连接 kuaiyu.site。真机预览请在小程序后台「开发管理 → 服务器域名」的 request 合法域名中加入 https://www.kuaiyu.site，或在右上角菜单中打开「开发调试」。",
@@ -49,6 +58,15 @@ const OVERRIDES = {
     heartAtlas: "3D heart",
     atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds\nThen: drag with one finger to turn the heart; pinch with two fingers to zoom, and drag with two fingers to move it.",
     atlasFailed: "The 3D heart could not load; showing the 2D heart.",
+    loadTitle: "Loading the 3D heart",
+    loadWait: "about 10–30 s",
+    "load.glb": "Downloading the heart model (2.3 MB)",
+    "load.glbCached": "Reading the heart model (saved on this phone)",
+    "load.engine": "Loading the 3D engine",
+    "load.build": "Building the 3D heart",
+    "load.warm": "Warming up, so it beats from the start",
+    loadSlow: "On a slow network, tap “2D heart” on the left; the model keeps downloading, and you can switch back to the 3D heart later.",
+    loadTip: "Did you know?",
     atlasPinned: "The 3D heart stays pinned",
     atlasFailedTitle: "3D heart unavailable",
     atlasDomain: "Cannot reach kuaiyu.site. For a phone preview, add https://www.kuaiyu.site to the request domains in the mini program console, or turn on debug mode from the top-right menu.",
@@ -63,6 +81,33 @@ const OVERRIDES = {
     copyFailed: "Long-press the text to copy it",
   },
 };
+// Shown one after another (6 s each) on the 3D heart's loading card; the first
+// one explains the gestures.
+const LOAD_TIPS = {
+  zh: [
+    "载入后：单指拖动旋转心脏；双指捏合缩放，双指同时拖动可平移。",
+    "下方的曲线已经在播放：可以先看压力、容积和心电图如何随时相变化。",
+    "心率 75 次/分时，一个心动周期约 0.8 秒，其中舒张期约占三分之二。",
+    "等容收缩期四个瓣膜全部关闭：心室压力陡升，容积不变。",
+    "第一心音主要来自房室瓣关闭，第二心音来自主动脉瓣和肺动脉瓣关闭。",
+    "安静时心室充盈大部分在舒张早期被动完成，心房收缩只再补充约两成。",
+    "压力–容积环围成的面积，约等于心室一次搏动所做的外功。",
+    "射血分数 = 每搏量 ÷ 舒张末期容积，正常约 55%~70%。",
+    "心率加快时，缩短得最多的是舒张期。",
+  ],
+  en: [
+    "Once loaded: drag with one finger to turn the heart; pinch to zoom, and drag with two fingers to move it.",
+    "The traces below are already playing: see how pressure, volume and the ECG change through the phases.",
+    "At 75 beats/min one cardiac cycle lasts about 0.8 s, and diastole takes about two thirds of it.",
+    "In isovolumic contraction all four valves are closed: ventricular pressure rises steeply at constant volume.",
+    "The first heart sound comes mainly from the closing AV valves; the second from the closing aortic and pulmonary valves.",
+    "At rest most ventricular filling happens passively in early diastole; atrial contraction adds only about a fifth.",
+    "The area inside the pressure–volume loop is roughly the external work of one beat.",
+    "Ejection fraction = stroke volume ÷ end-diastolic volume; normally about 55–70%.",
+    "When the heart rate rises, diastole is what shortens most.",
+  ],
+};
+const LOAD_STEPS = ["glb", "engine", "build", "warm"];
 const i18n = {
   language: "zh",
   dictionaries: labels, // read by the 3D heart (AtlasLabView)
@@ -96,6 +141,7 @@ Page({
     heartModel: "atlas", // opens on the 3D heart; falls back to "2d" if it cannot load
     atlasStatus: "",
     atlasReady: false,
+    loadCard: null, // the 3D heart's loading card (renderLoadCard)
     presets: [],
     preset: "anatomy",
     wallOpacity: 1,
@@ -519,6 +565,7 @@ Page({
   closeAtlas() {
     if (this.atlas) releaseAtlas(this.atlas);
     this.atlas = null;
+    this.endLoadCard();
     if (!this.unloaded) this.setData({ atlasReady: false, atlasStatus: "" });
   },
   // auto: started when the page opened (a failure then only shows a toast).
@@ -526,12 +573,21 @@ Page({
     if (this.atlas || this.atlasStarting) return;
     this.atlasStarting = true;
     const run = (this.atlasRun = (this.atlasRun ?? 0) + 1), current = () => run === this.atlasRun && !this.unloaded;
+    const step = (id, state) => current() && this.loadStep(id, state);
     this.setData({ atlasStatus: i18n.t("atlasLoading") });
+    this.beginLoadCard();
     try {
+      const glb = prefetchAtlas();
+      glb.then(() => step("glb", "done"), () => {});
+      // Let the card appear before the engine code is parsed (it blocks).
+      step("engine", "active");
+      await new Promise((resolve) => setTimeout(resolve, 50));
       // Loaded on first use: about 1 MB of three.js and the atlas engine.
       const shim = require("../../vendor/atlas-shim.js");
       const { AtlasLabView } = require("../../vendor/atlas3d.js");
       const { CONTENT_URL } = require("../../vendor/atlas-asset.js");
+      step("engine", "done");
+      step("build", "active");
       this.atlasShim = shim;
       const canvas = this.canvases.atlas;
       if (!canvas) throw new Error("WebGL canvas missing");
@@ -539,7 +595,7 @@ Page({
       const view = new AtlasLabView(shim.useCanvas(node, w, h), {
         i18n,
         readJSON: (name) => requestJSON(CONTENT_URL + name),
-        glb: prefetchAtlas(),
+        glb,
         onGraphicsChange: (lost) => lost && run === this.atlasRun && this.atlasFailed(new Error("WebGL context lost")),
       });
       await view.init();
@@ -547,9 +603,12 @@ Page({
       node.removeEventListener("pointerdown", view.handlePointerDown);
       node.removeEventListener("pointerup", view.handlePointerUp);
       view.setPreset(this.data.preset);
+      step("build", "done");
+      step("warm", "active");
       await this.warmAtlas(view);
       if (!current()) return releaseAtlas(view);
       this.atlas = view;
+      this.endLoadCard();
       this.setData({ atlasReady: true, atlasStatus: "" });
       this.syncWall();
       this.update(true);
@@ -559,6 +618,46 @@ Page({
     } finally {
       if (run === this.atlasRun) this.atlasStarting = false;
     }
+  },
+  // Loading card: the steps with their real progress, the time so far, a tip
+  // that changes every 6 s, and how to go to the 2D heart on a slow network.
+  beginLoadCard() {
+    clearInterval(this.loadTimer);
+    this.load = { started: Date.now(), steps: { glb: "active", engine: "wait", build: "wait", warm: "wait" } };
+    this.loadTimer = setInterval(() => this.renderLoadCard(), 1000);
+    this.renderLoadCard();
+  },
+  loadStep(id, state) {
+    if (!this.load) return;
+    this.load.steps[id] = state;
+    this.renderLoadCard();
+  },
+  endLoadCard() {
+    clearInterval(this.loadTimer);
+    this.load = null;
+    if (!this.unloaded && this.data.loadCard) this.setData({ loadCard: null });
+  },
+  renderLoadCard() {
+    const load = this.load;
+    if (!load || this.unloaded) return;
+    const seconds = Math.floor((Date.now() - load.started) / 1000), tips = LOAD_TIPS[i18n.language];
+    const score = LOAD_STEPS.reduce((sum, id) => sum + { done: 1, active: 0.35, wait: 0 }[load.steps[id]], 0);
+    this.setData({
+      loadCard: {
+        title: i18n.t("loadTitle"),
+        time: `${seconds} s · ${i18n.t("loadWait")}`,
+        progress: Math.round((score / LOAD_STEPS.length) * 100),
+        steps: LOAD_STEPS.map((id) => ({
+          id,
+          state: load.steps[id],
+          mark: { done: "✓", active: "●", wait: "○" }[load.steps[id]],
+          label: i18n.t(id === "glb" && atlasGlbCached ? "load.glbCached" : "load." + id),
+        })),
+        slow: i18n.t("loadSlow"),
+        tipLabel: i18n.t("loadTip"),
+        tip: tips[Math.floor(seconds / 6) % tips.length],
+      },
+    });
   },
   // The first motion steps build the engine's caches and the first renders
   // compile shaders: seconds on a phone. Do that behind the loading message
@@ -776,7 +875,7 @@ function retryOnce(run) {
 }
 // One download per launch, shared by the prefetch in onLoad and the 3D heart;
 // a failed one is forgotten so choosing the 3D heart again starts afresh.
-let atlasGlb = null;
+let atlasGlb = null, atlasGlbCached = false;
 function prefetchAtlas() {
   if (!atlasGlb) {
     const { GLB_URL } = require("../../vendor/atlas-asset.js");
@@ -833,7 +932,11 @@ function cachedDownload(url) {
       }, reject);
     fs.readFile({
       filePath: path,
-      success: (r) => (complete(r.data) ? resolve(r.data) : fs.unlink({ filePath: path, complete: download })),
+      success: (r) => {
+        if (!complete(r.data)) return fs.unlink({ filePath: path, complete: download });
+        atlasGlbCached = true;
+        resolve(r.data);
+      },
       fail: download,
     });
   });

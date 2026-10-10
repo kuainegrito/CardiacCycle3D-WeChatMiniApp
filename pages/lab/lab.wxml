@@ -13,7 +13,13 @@
       <canvas wx:if="{{!(atlas && heartModel === 'atlas')}}" type="2d" id="{{canvasId}}" class="heart-canvas"></canvas>
       <!-- Realistic heart: only in the docked stage (one WebGL canvas, see pages/lab/lab.js syncDock). -->
       <canvas wx:if="{{atlas && heartModel === 'atlas'}}" type="webgl2" id="atlas" class="heart-canvas" bindtouchstart="atlasTouch" bindtouchmove="atlasTouch" bindtouchend="atlasTouch" bindtouchcancel="atlasTouch"></canvas>
-      <view class="atlas-status" wx:if="{{atlas && heartModel === 'atlas' && atlasStatus}}">{{atlasStatus}}</view>
+      <view class="load-card" wx:if="{{atlas && heartModel === 'atlas' && loadCard}}">
+        <view class="load-head"><text class="load-title">{{loadCard.title}}</text><text class="load-time">{{loadCard.time}}</text></view>
+        <view class="load-bar"><view class="load-fill" style="width: {{loadCard.progress}}%"></view></view>
+        <view wx:for="{{loadCard.steps}}" wx:for-item="s" wx:key="id" class="load-step {{s.state}}"><text class="load-mark">{{s.mark}}</text><text>{{s.label}}</text></view>
+        <view class="load-slow">{{loadCard.slow}}</view>
+        <view class="load-tip"><text class="load-tip-label">{{loadCard.tipLabel}}</text><text>{{loadCard.tip}}</text></view>
+      </view>
       <view class="view-presets" wx:if="{{atlas && heartModel === 'atlas' && atlasReady}}">
         <view wx:for="{{presets}}" wx:key="id" class="preset {{item.id === preset ? 'selected' : ''}}" data-id="{{item.id}}" bindtap="setPreset">{{item.label}}</view>
       </view>
@@ -21,12 +27,12 @@
         <view class="wall-row"><text>{{t.wallOpacity}}</text><text class="out">{{wallOpacityText}}</text></view>
         <slider class="wall-slider" min="0" max="1" step="0.05" value="{{wallOpacity}}" bindchanging="onWallOpacity" bindchange="onWallOpacity" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="14" block-color="#45c8f5"/>
       </view>
-      <view class="badge"><view class="live-dot"></view><text>{{currentPhase}}</text></view>
+      <view class="badge" wx:if="{{!(atlas && heartModel === 'atlas' && loadCard)}}"><view class="live-dot"></view><text>{{currentPhase}}</text></view>
       <view class="model-switch">
         <view class="model-btn {{heartModel === 'atlas' ? 'on' : ''}}" data-model="atlas" bindtap="chooseModel">{{t.heartAtlas}}</view>
         <view class="model-btn {{heartModel === '2d' ? 'on' : ''}}" data-model="2d" bindtap="chooseModel">{{t.heart2d}}</view>
       </view>
-      <view class="orientation"><text>R</text><text>↑ A</text><text>L</text></view>
+      <view class="orientation" wx:if="{{!(atlas && heartModel === 'atlas' && loadCard)}}"><text>R</text><text>↑ A</text><text>L</text></view>
     </view>
     <view class="wall-note" wx:if="{{atlas && heartModel === 'atlas' && wallNote}}">{{t.wallOriginContext}}</view>
   </view>
@@ -35,7 +41,7 @@
 <!-- Mirrors the phone layout of kuaiyu.site/cardiac_cycle (index.html), without outside links, brand header,
      intro lines, quiz or clinical-connection panel; the author line sits in the "?" dialog (owner's choices). -->
 <view class="page">
-  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
+  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, loadCard, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
   <scroll-view scroll-y class="main" bindscroll="onScroll" enhanced show-scrollbar="{{false}}">
   <view class="top-row">
     <view class="mobile-panels">
