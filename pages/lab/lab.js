@@ -92,8 +92,8 @@ Page({
     author: AUTHOR,
     panel: "heart", // mobile tab: heart | phases
     pinned: true,
-    docked: false, // pinned heart shown above the scroll area
-    heartModel: "2d", // opens on the 2D heart; "atlas" = 3D heart
+    docked: true, // pinned heart shown above the scroll area (the 3D heart is always docked)
+    heartModel: "atlas", // opens on the 3D heart; falls back to "2d" if it cannot load
     atlasStatus: "",
     atlasReady: false,
     presets: [],
@@ -133,6 +133,8 @@ Page({
 
   // ---- lifecycle -----------------------------------------------------------
   onLoad() {
+    // The model download starts with the page, in parallel with the 2D setup.
+    prefetchAtlas();
     this.modifiers = { preload: 1, afterload: 1, contractility: 1 };
     this.chartsSeen = { strips: true, pv: true, ap: true };
     this.model = createModel(baseline, scenarios[0]);
@@ -153,6 +155,10 @@ Page({
       this.visible = true;
       this.restartLoop();
       this.measureStage();
+      if (this.data.heartModel === "atlas") {
+        await this.bindCanvas("atlas", "webgl");
+        this.startAtlas({ auto: true });
+      }
       // Keeps the frame loop alive if the canvas it was waiting on goes away.
       this.watchdog = setInterval(() => {
         if (this.visible && Date.now() - (this.lastFrame ?? 0) > 300) this.restartLoop();
@@ -171,9 +177,10 @@ Page({
   },
   onUnload() {
     this.visible = false;
+    this.unloaded = true;
     clearInterval(this.watchdog);
     this.chartObserver?.disconnect();
-    this.atlas?.dispose();
+    this.closeAtlas();
   },
   onShareAppMessage() {
     return { title: i18n.t("title"), path: "/pages/lab/lab" };
@@ -477,6 +484,7 @@ Page({
         } else if (this.data.panel === "heart") await this.bindCanvas("heart");
         this.update(true);
         this.restartLoop();
+        if (!docked) this.measureStage(); // first measurement when the page opened docked
         resolve();
       }),
     );
@@ -485,8 +493,14 @@ Page({
   // ---- 3D heart (the website's AtlasLabView, vendor/atlas3d.js) -----
   chooseModel(e) {
     const heartModel = e.currentTarget.dataset.model;
-    if (heartModel === this.data.heartModel || this.atlasStarting) return;
-    if (heartModel === "2d") this.closeAtlas();
+    // The 2D heart can be chosen while the 3D one is still loading (startAtlas
+    // then discards it); the 3D heart is never started twice.
+    if (heartModel === this.data.heartModel || (heartModel === "atlas" && this.atlasStarting)) return;
+    if (heartModel === "2d") {
+      this.atlasRun = (this.atlasRun ?? 0) + 1; // abandons a 3D heart still loading
+      this.atlasStarting = false;
+      this.closeAtlas();
+    }
     this.setData({ heartModel }, async () => {
       if (heartModel === "atlas") {
         // From an undocked page the dock appears now; from a docked 2D heart
@@ -503,34 +517,21 @@ Page({
     });
   },
   closeAtlas() {
-    // Release the GPU resources once every shader compile started by a preset
-    // has settled (AtlasLabView counts them in holdFrame; three.js polls them
-    // on a timer and would otherwise read freed programs). Gives up after 5 s.
-    const atlas = this.atlas;
-    if (atlas) {
-      const started = Date.now();
-      const release = () => {
-        if (atlas.holdFrame > 0 && Date.now() - started < 5000) return setTimeout(release, 50);
-        try {
-          atlas.dispose();
-        } catch (error) {
-          console.warn("3D heart dispose:", error);
-        }
-      };
-      release();
-    }
+    if (this.atlas) releaseAtlas(this.atlas);
     this.atlas = null;
-    this.setData({ atlasReady: false, atlasStatus: "" });
+    if (!this.unloaded) this.setData({ atlasReady: false, atlasStatus: "" });
   },
-  async startAtlas() {
+  // auto: started when the page opened (a failure then only shows a toast).
+  async startAtlas({ auto = false } = {}) {
     if (this.atlas || this.atlasStarting) return;
     this.atlasStarting = true;
+    const run = (this.atlasRun = (this.atlasRun ?? 0) + 1), current = () => run === this.atlasRun && !this.unloaded;
     this.setData({ atlasStatus: i18n.t("atlasLoading") });
     try {
       // Loaded on first use: about 1 MB of three.js and the atlas engine.
       const shim = require("../../vendor/atlas-shim.js");
       const { AtlasLabView } = require("../../vendor/atlas3d.js");
-      const { GLB_URL, CONTENT_URL } = require("../../vendor/atlas-asset.js");
+      const { CONTENT_URL } = require("../../vendor/atlas-asset.js");
       this.atlasShim = shim;
       const canvas = this.canvases.atlas;
       if (!canvas) throw new Error("WebGL canvas missing");
@@ -538,8 +539,8 @@ Page({
       const view = new AtlasLabView(shim.useCanvas(node, w, h), {
         i18n,
         readJSON: (name) => requestJSON(CONTENT_URL + name),
-        glb: cachedDownload(GLB_URL),
-        onGraphicsChange: (lost) => lost && this.atlasFailed(new Error("WebGL context lost")),
+        glb: prefetchAtlas(),
+        onGraphicsChange: (lost) => lost && run === this.atlasRun && this.atlasFailed(new Error("WebGL context lost")),
       });
       await view.init();
       // No tap-to-select here: drop the website's picker, keep OrbitControls.
@@ -547,15 +548,16 @@ Page({
       node.removeEventListener("pointerup", view.handlePointerUp);
       view.setPreset(this.data.preset);
       await this.warmAtlas(view);
+      if (!current()) return releaseAtlas(view);
       this.atlas = view;
       this.setData({ atlasReady: true, atlasStatus: "" });
       this.syncWall();
       this.update(true);
       this.restartLoop();
     } catch (error) {
-      this.atlasFailed(error);
+      if (current()) this.atlasFailed(error, auto);
     } finally {
-      this.atlasStarting = false;
+      if (run === this.atlasRun) this.atlasStarting = false;
     }
   },
   // The first motion steps build the engine's caches and the first renders
@@ -583,8 +585,9 @@ Page({
       view.holdFrame--;
     }
   },
-  atlasFailed(error) {
+  atlasFailed(error, auto = false) {
     console.error("3D heart unavailable:", error);
+    if (this.data.heartModel !== "atlas") return; // already back on the 2D heart
     const message = String(error?.message ?? error);
     const why = /domain|合法域名|url not in/i.test(message)
       ? i18n.t("atlasDomain")
@@ -595,11 +598,15 @@ Page({
           : /request|HTTP|timeout|fail/i.test(message)
             ? i18n.t("atlasNetwork")
             : "";
-    wx.showModal({
-      title: i18n.t("atlasFailedTitle"),
-      content: i18n.t("atlasFailed") + "\n\n" + (why ? why + "\n\n" : "") + i18n.t("reason") + ": " + message.slice(0, 160),
-      showCancel: false,
-    });
+    // Opening the mini program never stops on a dialog: the 2D heart takes over
+    // with a short note; the details are shown when the 3D heart was chosen by hand.
+    if (auto) wx.showToast({ title: i18n.t("atlasFailed"), icon: "none", duration: 3000 });
+    else
+      wx.showModal({
+        title: i18n.t("atlasFailedTitle"),
+        content: i18n.t("atlasFailed") + "\n\n" + (why ? why + "\n\n" : "") + i18n.t("reason") + ": " + message.slice(0, 160),
+        showCancel: false,
+      });
     this.closeAtlas();
     this.setData({ heartModel: "2d" }, async () => {
       await this.syncDock();
@@ -748,13 +755,50 @@ Page({
 
 // JSON from the website's content/ folder (the same files the website reads).
 function requestJSON(url) {
-  return new Promise((resolve, reject) =>
-    wx.request({
-      url,
-      success: (res) => (res.statusCode === 200 ? resolve(res.data) : reject(new Error(url + ": HTTP " + res.statusCode))),
-      fail: (err) => reject(new Error(url + ": " + err.errMsg)),
-    }),
+  return retryOnce(() =>
+    new Promise((resolve, reject) =>
+      wx.request({
+        url,
+        timeout: 20000,
+        success: (res) => (res.statusCode === 200 ? resolve(res.data) : reject(new Error(url + ": HTTP " + res.statusCode))),
+        fail: (err) => reject(new Error(url + ": " + err.errMsg)),
+      }),
+    ),
   );
+}
+// A dropped connection (common on mobile networks) gets one more try after a
+// short pause; HTTP errors and domain refusals do not.
+function retryOnce(run) {
+  return run().catch((error) => {
+    if (/HTTP \d|domain|合法域名|url not in/i.test(error.message)) throw error;
+    return new Promise((resolve) => setTimeout(resolve, 1500)).then(run);
+  });
+}
+// One download per launch, shared by the prefetch in onLoad and the 3D heart;
+// a failed one is forgotten so choosing the 3D heart again starts afresh.
+let atlasGlb = null;
+function prefetchAtlas() {
+  if (!atlasGlb) {
+    const { GLB_URL } = require("../../vendor/atlas-asset.js");
+    atlasGlb = cachedDownload(GLB_URL);
+    atlasGlb.catch(() => (atlasGlb = null));
+  }
+  return atlasGlb;
+}
+// Release a 3D heart's GPU resources once every shader compile started by a
+// preset has settled (AtlasLabView counts them in holdFrame; three.js polls
+// them on a timer and would otherwise read freed programs). Gives up after 5 s.
+function releaseAtlas(atlas) {
+  const started = Date.now();
+  const release = () => {
+    if (atlas.holdFrame > 0 && Date.now() - started < 5000) return setTimeout(release, 50);
+    try {
+      atlas.dispose();
+    } catch (error) {
+      console.warn("3D heart dispose:", error);
+    }
+  };
+  release();
 }
 // The heart model (2.3 MB), kept in the mini program's file space after the
 // first download; its hashed name changes whenever the website's file does.
@@ -767,22 +811,42 @@ function cachedDownload(url) {
     return head.getUint32(0, true) === 0x46546c67 && head.getUint32(8, true) === data.byteLength;
   };
   return new Promise((resolve, reject) => {
+    const fetch = () =>
+      new Promise((ok, fail) =>
+        wx.request({
+          url,
+          responseType: "arraybuffer",
+          timeout: 60000,
+          success: (res) => {
+            if (res.statusCode !== 200) return fail(new Error(url + ": HTTP " + res.statusCode));
+            if (!complete(res.data)) return fail(new Error(url + ": incomplete download"));
+            ok(res.data);
+          },
+          fail: (err) => fail(new Error(url + ": " + err.errMsg)),
+        }),
+      );
     const download = () =>
-      wx.request({
-        url,
-        responseType: "arraybuffer",
-        success: (res) => {
-          if (res.statusCode !== 200) return reject(new Error(url + ": HTTP " + res.statusCode));
-          if (!complete(res.data)) return reject(new Error(url + ": incomplete download"));
-          fs.writeFile({ filePath: path, data: res.data, fail: () => {} });
-          resolve(res.data);
-        },
-        fail: (err) => reject(new Error(url + ": " + err.errMsg)),
-      });
+      retryOnce(fetch).then((data) => {
+        removeOldModels(fs, path);
+        fs.writeFile({ filePath: path, data, fail: () => {} });
+        resolve(data);
+      }, reject);
     fs.readFile({
       filePath: path,
       success: (r) => (complete(r.data) ? resolve(r.data) : fs.unlink({ filePath: path, complete: download })),
       fail: download,
     });
+  });
+}
+// Models of earlier website releases (other hashes) are deleted when a new one
+// is saved, so the cache holds a single 2.3 MB file.
+function removeOldModels(fs, keep) {
+  fs.readdir({
+    dirPath: wx.env.USER_DATA_PATH,
+    success: ({ files }) => {
+      for (const name of files)
+        if (/^heart-atlas-.*\.glb$/.test(name) && wx.env.USER_DATA_PATH + "/" + name !== keep)
+          fs.unlink({ filePath: wx.env.USER_DATA_PATH + "/" + name, fail: () => {} });
+    },
   });
 }
