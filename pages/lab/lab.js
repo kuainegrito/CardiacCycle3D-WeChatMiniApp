@@ -687,7 +687,8 @@ Page({
     this.atlasStarting = true;
     const run = (this.atlasRun = (this.atlasRun ?? 0) + 1), current = () => run === this.atlasRun && !this.unloaded;
     this.setData({ atlasStatus: i18n.t("atlasLoading"), atlasStandby: false });
-    this.beginLoadCard();
+    // A parked heart only reconnects (about a second): no loading card for that.
+    if (!this.parkedAtlas) this.beginLoadCard();
     let view = null;
     try {
       if (!this.parkedAtlas) await this.buildAtlas();
