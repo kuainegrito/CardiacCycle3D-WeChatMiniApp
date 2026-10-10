@@ -76,6 +76,11 @@
 .model-switch { position: absolute; top: 51px; left: 12px; display: flex; flex-direction: column; gap: 3px; padding: 3px; background: rgba(8,18,34,0.8); border: 1px solid rgba(120,168,226,0.32); border-radius: 12px; }
 .model-btn { font-size: 10px; color: #94a5bf; padding: 6px 10px; border-radius: 999px; text-align: center; }
 .model-btn.on { color: #04121f; font-weight: 700; background: linear-gradient(120deg, #45c8f5, #4f7cff); box-shadow: 0 0 16px rgba(69,200,245,0.3); }
+/* A 3D heart built behind the 2D heart is ready: tap to switch (pages/lab/lab.js buildAtlas). */
+.atlas-standby { position: absolute; top: 12px; right: 10px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 10px; font-weight: 700; color: #04121f; border-radius: 30px; background: linear-gradient(120deg, #45c8f5, #4f7cff); box-shadow: 0 0 16px rgba(69,200,245,0.45); animation: standby-in 0.4s ease-out, standby-glow 1.6s ease-in-out 0.4s 4; }
+.atlas-standby .live-dot { background: #04121f; box-shadow: none; }
+@keyframes standby-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes standby-glow { 0%, 100% { box-shadow: 0 0 16px rgba(69,200,245,0.45); } 50% { box-shadow: 0 0 26px rgba(69,200,245,0.9); } }
 /* 3D heart loading card (pages/lab/lab.js renderLoadCard); the phase badge is hidden meanwhile. */
 .load-card { position: absolute; left: 92px; right: 10px; top: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 5px; padding: 9px 11px; overflow: hidden; font-size: 10px; line-height: 15px; color: #c7d6ea; border-radius: 10px; background: rgba(8,18,34,0.88); border: 1px solid rgba(120,168,226,0.32); }
 .load-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }

@@ -27,6 +27,7 @@
         <view class="wall-row"><text>{{t.wallOpacity}}</text><text class="out">{{wallOpacityText}}</text></view>
         <slider class="wall-slider" min="0" max="1" step="0.05" value="{{wallOpacity}}" bindchanging="onWallOpacity" bindchange="onWallOpacity" activeColor="#45c8f5" backgroundColor="#3b3b3b" block-size="14" block-color="#45c8f5"/>
       </view>
+      <view class="atlas-standby" wx:if="{{heartModel === '2d' && atlasStandby}}" data-model="atlas" bindtap="chooseModel"><view class="live-dot"></view><text>{{t.atlasStandby}}</text></view>
       <view class="badge" wx:if="{{!(atlas && heartModel === 'atlas' && loadCard)}}"><view class="live-dot"></view><text>{{currentPhase}}</text></view>
       <view class="model-switch">
         <view class="model-btn {{heartModel === 'atlas' ? 'on' : ''}}" data-model="atlas" bindtap="chooseModel">{{t.heartAtlas}}</view>
@@ -41,7 +42,7 @@
 <!-- Mirrors the phone layout of kuaiyu.site/cardiac_cycle (index.html), without outside links, brand header,
      intro lines, quiz or clinical-connection panel; the author line sits in the "?" dialog (owner's choices). -->
 <view class="page">
-  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, loadCard, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
+  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, loadCard, atlasStandby, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
   <scroll-view scroll-y class="main" bindscroll="onScroll" enhanced show-scrollbar="{{false}}">
   <view class="top-row">
     <view class="mobile-panels">
@@ -83,7 +84,7 @@
 
   <!-- Heart & traces: created only on this tab (canvases must not be hidden with CSS, see lab.js bindCanvas) -->
   <view class="center" wx:if="{{panel === 'heart'}}">
-    <view class="stage-slot" wx:if="{{!docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlas: false, canvasId: 'heart'}}"/></view>
+    <view class="stage-slot" wx:if="{{!docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStandby, atlas: false, canvasId: 'heart'}}"/></view>
 
     <view class="panel wiggers-panel">
       <view class="panel-heading">

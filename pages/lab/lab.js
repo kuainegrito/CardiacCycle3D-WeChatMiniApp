@@ -39,7 +39,9 @@ const OVERRIDES = {
     "load.engine": "载入三维引擎",
     "load.build": "构建三维心脏",
     "load.warm": "预热，让心脏一出现就在跳",
-    loadSlow: "网络较慢时，可先点左侧「二维心脏」；模型会在后台继续下载，之后再切回「三维心脏」即可。",
+    loadSlow: "网络较慢时，可先点左侧「二维心脏」；三维心脏会在后台继续载入，好了会在右上角提示。",
+    loadSlowDownload: "网络较慢时，可先点左侧「二维心脏」；模型会在后台继续下载，之后再切回「三维心脏」即可。",
+    atlasStandby: "三维心脏已载入 · 点此切换",
     loadTip: "小知识",
     atlasPinned: "三维心脏始终固定在顶部",
     atlasFailedTitle: "三维心脏载入失败",
@@ -65,7 +67,9 @@ const OVERRIDES = {
     "load.engine": "Loading the 3D engine",
     "load.build": "Building the 3D heart",
     "load.warm": "Warming up, so it beats from the start",
-    loadSlow: "On a slow network, tap “2D heart” on the left; the model keeps downloading, and you can switch back to the 3D heart later.",
+    loadSlow: "On a slow network, tap “2D heart” on the left; the 3D heart keeps loading, and a note in the top-right corner says when it is ready.",
+    loadSlowDownload: "On a slow network, tap “2D heart” on the left; the model keeps downloading, and you can switch back to the 3D heart later.",
+    atlasStandby: "3D heart ready · tap to switch",
     loadTip: "Did you know?",
     atlasPinned: "The 3D heart stays pinned",
     atlasFailedTitle: "3D heart unavailable",
@@ -125,7 +129,7 @@ const TEXT_KEYS = [
   "rightHeart", "readValues",
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
-  "atlasLoading", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
+  "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
 ];
 
 Page({
@@ -142,6 +146,7 @@ Page({
     atlasStatus: "",
     atlasReady: false,
     loadCard: null, // the 3D heart's loading card (renderLoadCard)
+    atlasStandby: false, // a 3D heart built behind the 2D heart is ready (buildAtlas)
     presets: [],
     preset: "anatomy",
     wallOpacity: 1,
@@ -181,6 +186,12 @@ Page({
   onLoad() {
     // The model download starts with the page, in parallel with the 2D setup.
     prefetchAtlas();
+    this.atlasSteps = freshSteps();
+    // A heart kept for the 3D view (parked) is let go when the phone runs low.
+    this.onMemory = () => {
+      if (this.data.heartModel !== "atlas") this.releaseParked();
+    };
+    wx.onMemoryWarning?.(this.onMemory);
     this.modifiers = { preload: 1, afterload: 1, contractility: 1 };
     this.chartsSeen = { strips: true, pv: true, ap: true };
     this.model = createModel(baseline, scenarios[0]);
@@ -226,7 +237,9 @@ Page({
     this.unloaded = true;
     clearInterval(this.watchdog);
     this.chartObserver?.disconnect();
+    wx.offMemoryWarning?.(this.onMemory);
     this.closeAtlas();
+    this.releaseParked();
   },
   onShareAppMessage() {
     return { title: i18n.t("title"), path: "/pages/lab/lab" };
@@ -543,9 +556,9 @@ Page({
     // then discards it); the 3D heart is never started twice.
     if (heartModel === this.data.heartModel || (heartModel === "atlas" && this.atlasStarting)) return;
     if (heartModel === "2d") {
-      this.atlasRun = (this.atlasRun ?? 0) + 1; // abandons a 3D heart still loading
+      this.atlasRun = (this.atlasRun ?? 0) + 1; // a 3D heart still loading goes on off screen
       this.atlasStarting = false;
-      this.closeAtlas();
+      this.closeAtlas(true);
     }
     this.setData({ heartModel }, async () => {
       if (heartModel === "atlas") {
@@ -562,51 +575,165 @@ Page({
       this.restartLoop();
     });
   },
-  closeAtlas() {
-    if (this.atlas) releaseAtlas(this.atlas);
+  // Leaving the 3D heart: a ready one is parked (kept built, without its
+  // canvas) so coming back is quick; otherwise it is released. keep = false
+  // releases in any case (failures, page closed).
+  closeAtlas(keep = false) {
+    const atlas = this.atlas;
     this.atlas = null;
+    if (atlas) {
+      if (keep && atlas.holdFrame === 0 && this.parkAtlas(atlas)) this.parkedAtlas = atlas;
+      else releaseAtlas(atlas);
+    }
     this.endLoadCard();
     if (!this.unloaded) this.setData({ atlasReady: false, atlasStatus: "" });
+  },
+  parkAtlas(view) {
+    try {
+      require("../../vendor/atlas3d.js").parkAtlasView(view);
+      return true;
+    } catch (error) {
+      console.warn("3D heart park:", error);
+      return false;
+    }
+  },
+  releaseParked() {
+    if (this.parkedAtlas) releaseAtlas(this.parkedAtlas);
+    this.parkedAtlas = null;
+    if (!this.unloaded && this.data.atlasStandby) this.setData({ atlasStandby: false });
+  },
+  // Builds the 3D heart on an off-screen canvas, so the build goes on while
+  // the 2D heart is shown; the result is parked until a canvas shows it. If
+  // it finishes while the 2D heart is shown, the stage's top-right corner says
+  // so (atlasStandby). Resolves to null where WeChat has no off-screen WebGL2
+  // (startAtlas then builds on the page's canvas).
+  buildAtlas() {
+    if (!this.atlasBuild) {
+      this.atlasBuild = this.buildOffscreen().then(
+        (view) => {
+          this.atlasBuild = null;
+          if (view && this.unloaded) releaseAtlas(view);
+          else if (view) {
+            this.parkedAtlas = view;
+            if (this.data.heartModel !== "atlas") this.setData({ atlasStandby: true });
+          }
+          return view;
+        },
+        (error) => {
+          this.atlasBuild = null;
+          throw error;
+        },
+      );
+      this.atlasBuild.catch((error) => console.warn("3D heart build:", error));
+    }
+    return this.atlasBuild;
+  },
+  async buildOffscreen() {
+    const { AtlasLabView, shim, CONTENT_URL } = await this.loadEngine();
+    const glb = prefetchAtlas();
+    const canvas = this.canvases.atlas ?? { w: 364, h: 299 };
+    const node = takeOffscreen();
+    if (!node) return null;
+    this.markStep("build", "active");
+    const view = new AtlasLabView(shim.useCanvas(node, canvas.w, canvas.h), {
+      i18n,
+      readJSON: (name) => requestJSON(CONTENT_URL + name),
+      glb,
+      onGraphicsChange: (lost) => lost && this.atlas === view && this.atlasFailed(new Error("WebGL context lost")),
+    });
+    view.holdFrame++; // nothing is drawn (or compiled) off screen
+    try {
+      await view.init();
+    } catch (error) {
+      this.markStep("build", "wait");
+      // A model that did not arrive is a real failure; anything else is taken
+      // as this WeChat's off-screen WebGL falling short: build on screen.
+      if (!(await glb.then(() => true, () => false))) throw error;
+      console.warn("3D heart off-screen build failed; building on screen:", error);
+      offscreenBroken = true;
+      return null;
+    }
+    view.holdFrame--;
+    view.presetPending = true;
+    if (!this.parkAtlas(view)) {
+      releaseAtlas(view);
+      offscreenBroken = true;
+      return null;
+    }
+    this.markStep("build", "done");
+    return view;
+  },
+  // The 3D engine (about 1 MB of three.js and the atlas engine), loaded on first use.
+  async loadEngine() {
+    if (!this.engine) {
+      this.markStep("engine", "active");
+      // Let the loading card appear before the engine code is parsed (it blocks).
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const { AtlasLabView, resumeAtlasView } = require("../../vendor/atlas3d.js");
+      this.engine = {
+        AtlasLabView,
+        resumeAtlasView,
+        shim: require("../../vendor/atlas-shim.js"),
+        CONTENT_URL: require("../../vendor/atlas-asset.js").CONTENT_URL,
+      };
+      this.atlasShim = this.engine.shim;
+      this.markStep("engine", "done");
+    }
+    return this.engine;
   },
   // auto: started when the page opened (a failure then only shows a toast).
   async startAtlas({ auto = false } = {}) {
     if (this.atlas || this.atlasStarting) return;
     this.atlasStarting = true;
     const run = (this.atlasRun = (this.atlasRun ?? 0) + 1), current = () => run === this.atlasRun && !this.unloaded;
-    const step = (id, state) => current() && this.loadStep(id, state);
-    this.setData({ atlasStatus: i18n.t("atlasLoading") });
+    this.setData({ atlasStatus: i18n.t("atlasLoading"), atlasStandby: false });
     this.beginLoadCard();
+    let view = null;
     try {
-      const glb = prefetchAtlas();
-      glb.then(() => step("glb", "done"), () => {});
-      // Let the card appear before the engine code is parsed (it blocks).
-      step("engine", "active");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      // Loaded on first use: about 1 MB of three.js and the atlas engine.
-      const shim = require("../../vendor/atlas-shim.js");
-      const { AtlasLabView } = require("../../vendor/atlas3d.js");
-      const { CONTENT_URL } = require("../../vendor/atlas-asset.js");
-      step("engine", "done");
-      step("build", "active");
-      this.atlasShim = shim;
+      if (!this.parkedAtlas) await this.buildAtlas();
+      // The 2D heart was chosen meanwhile: a finished build stays parked.
+      if (!current()) return;
+      const { AtlasLabView, resumeAtlasView, shim, CONTENT_URL } = await this.loadEngine();
       const canvas = this.canvases.atlas;
       if (!canvas) throw new Error("WebGL canvas missing");
       const { node, w, h } = canvas;
-      const view = new AtlasLabView(shim.useCanvas(node, w, h), {
-        i18n,
-        readJSON: (name) => requestJSON(CONTENT_URL + name),
-        glb,
-        onGraphicsChange: (lost) => lost && run === this.atlasRun && this.atlasFailed(new Error("WebGL context lost")),
-      });
-      await view.init();
-      // No tap-to-select here: drop the website's picker, keep OrbitControls.
-      node.removeEventListener("pointerdown", view.handlePointerDown);
-      node.removeEventListener("pointerup", view.handlePointerUp);
-      view.setPreset(this.data.preset);
-      step("build", "done");
-      step("warm", "active");
+      if (this.parkedAtlas) {
+        view = this.parkedAtlas;
+        this.parkedAtlas = null;
+        resumeAtlasView(view, shim.useCanvas(node, w, h));
+      } else {
+        // No off-screen WebGL2 here: build on the page's canvas (choosing the
+        // 2D heart meanwhile abandons this build).
+        this.markStep("build", "active");
+        view = new AtlasLabView(shim.useCanvas(node, w, h), {
+          i18n,
+          readJSON: (name) => requestJSON(CONTENT_URL + name),
+          glb: prefetchAtlas(),
+          onGraphicsChange: (lost) => lost && this.atlas === view && this.atlasFailed(new Error("WebGL context lost")),
+        });
+        await view.init();
+        // No tap-to-select here: drop the website's picker, keep OrbitControls.
+        node.removeEventListener("pointerdown", view.handlePointerDown);
+        node.removeEventListener("pointerup", view.handlePointerUp);
+        view.presetPending = true;
+      }
+      this.markStep("build", "done");
+      // A newly built heart takes the chosen view; a parked one keeps its own
+      // (including a custom wall opacity).
+      if (view.presetPending) {
+        view.presetPending = false;
+        view.setPreset(this.data.preset);
+      }
+      this.markStep("warm", "active");
       await this.warmAtlas(view);
-      if (!current()) return releaseAtlas(view);
+      if (!current()) {
+        // The 2D heart was chosen during the warm-up: keep the heart parked.
+        if (!this.unloaded && this.parkAtlas(view)) {
+          this.parkedAtlas = view;
+          this.setData({ atlasStandby: true });
+        } else releaseAtlas(view);
+        return;
+      }
       this.atlas = view;
       this.endLoadCard();
       this.setData({ atlasReady: true, atlasStatus: "" });
@@ -614,6 +741,8 @@ Page({
       this.update(true);
       this.restartLoop();
     } catch (error) {
+      if (view) releaseAtlas(view);
+      this.atlasSteps = freshSteps();
       if (current()) this.atlasFailed(error, auto);
     } finally {
       if (run === this.atlasRun) this.atlasStarting = false;
@@ -621,15 +750,21 @@ Page({
   },
   // Loading card: the steps with their real progress, the time so far, a tip
   // that changes every 6 s, and how to go to the 2D heart on a slow network.
-  beginLoadCard() {
-    clearInterval(this.loadTimer);
-    this.load = { started: Date.now(), steps: { glb: "active", engine: "wait", build: "wait", warm: "wait" } };
-    this.loadTimer = setInterval(() => this.renderLoadCard(), 1000);
+  // The steps belong to the 3D heart (this.atlasSteps), so a build that went
+  // on behind the 2D heart shows its progress when the card returns.
+  markStep(id, state) {
+    this.atlasSteps[id] = state;
     this.renderLoadCard();
   },
-  loadStep(id, state) {
-    if (!this.load) return;
-    this.load.steps[id] = state;
+  beginLoadCard() {
+    clearInterval(this.loadTimer);
+    const steps = this.atlasSteps;
+    if (this.parkedAtlas) Object.assign(steps, { glb: "done", engine: "done", build: "done" });
+    if (steps.glb === "wait") steps.glb = "active";
+    steps.warm = "wait";
+    this.load = { started: Date.now() };
+    prefetchAtlas().then(() => this.markStep("glb", "done"), () => {});
+    this.loadTimer = setInterval(() => this.renderLoadCard(), 1000);
     this.renderLoadCard();
   },
   endLoadCard() {
@@ -638,10 +773,10 @@ Page({
     if (!this.unloaded && this.data.loadCard) this.setData({ loadCard: null });
   },
   renderLoadCard() {
-    const load = this.load;
+    const load = this.load, steps = this.atlasSteps;
     if (!load || this.unloaded) return;
     const seconds = Math.floor((Date.now() - load.started) / 1000), tips = LOAD_TIPS[i18n.language];
-    const score = LOAD_STEPS.reduce((sum, id) => sum + { done: 1, active: 0.35, wait: 0 }[load.steps[id]], 0);
+    const score = LOAD_STEPS.reduce((sum, id) => sum + { done: 1, active: 0.35, wait: 0 }[steps[id]], 0);
     this.setData({
       loadCard: {
         title: i18n.t("loadTitle"),
@@ -649,11 +784,11 @@ Page({
         progress: Math.round((score / LOAD_STEPS.length) * 100),
         steps: LOAD_STEPS.map((id) => ({
           id,
-          state: load.steps[id],
-          mark: { done: "✓", active: "●", wait: "○" }[load.steps[id]],
+          state: steps[id],
+          mark: { done: "✓", active: "●", wait: "○" }[steps[id]],
           label: i18n.t(id === "glb" && atlasGlbCached ? "load.glbCached" : "load." + id),
         })),
-        slow: i18n.t("loadSlow"),
+        slow: i18n.t(offscreenBroken || !canBuildOffscreen() ? "loadSlowDownload" : "loadSlow"),
         tipLabel: i18n.t("loadTip"),
         tip: tips[Math.floor(seconds / 6) % tips.length],
       },
@@ -876,6 +1011,33 @@ function retryOnce(run) {
 // One download per launch, shared by the prefetch in onLoad and the 3D heart;
 // a failed one is forgotten so choosing the 3D heart again starts afresh.
 let atlasGlb = null, atlasGlbCached = false;
+const freshSteps = () => ({ glb: "wait", engine: "wait", build: "wait", warm: "wait" });
+// Off-screen WebGL2 (wx.createOffscreenCanvas) lets the 3D heart be built
+// without a canvas on the page. Probed once; a build that fails there for
+// any reason other than the network marks it broken for this launch.
+let offscreenNode = null, offscreenSupported = null, offscreenBroken = false;
+function makeOffscreen() {
+  try {
+    const node = wx.createOffscreenCanvas?.({ type: "webgl", width: 364, height: 299 });
+    return node?.getContext?.("webgl2") ? node : null;
+  } catch (error) {
+    console.warn("off-screen WebGL2:", error);
+    return null;
+  }
+}
+function canBuildOffscreen() {
+  if (offscreenSupported === null) {
+    offscreenNode = makeOffscreen();
+    offscreenSupported = !!offscreenNode;
+  }
+  return offscreenSupported && !offscreenBroken;
+}
+function takeOffscreen() {
+  if (!canBuildOffscreen()) return null;
+  const node = offscreenNode ?? makeOffscreen();
+  offscreenNode = null;
+  return node;
+}
 function prefetchAtlas() {
   if (!atlasGlb) {
     const { GLB_URL } = require("../../vendor/atlas-asset.js");
