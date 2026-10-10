@@ -11,9 +11,9 @@ import { document } from "./mp-dom.js";
 // unavailable. Teaching illustration, not measured anatomy.
 import { ventricularVolumes } from "./ventricular-timing.js";
 import { atrialVolumeTargets } from "./atrial-targets.js";
-import { diseasedValveBlends } from "./valve-disease.js";
+import { diseasedValveBlends, stenosisLevel } from "./valve-disease.js";
 
-export const HEART2D_VERSION = 3;
+export const HEART2D_VERSION = 4;
 const SVG = "http://www.w3.org/2000/svg";
 
 // Volume (mL) drawn as the small (s = 0) and large (s = 1) outline. Normal
@@ -27,6 +27,16 @@ export const VOLUME_RANGE = Object.freeze({
   RA: [79, 109],
 });
 const LIMITS = [-0.35, 1.9];
+
+// CC-47 (owner, 2026-10-10: the stenotic valve looked soft and opened too
+// wide): calcified aortic cusps do not bend. Each keeps its closed shape and
+// swings about its hinge as one rigid piece, by at most STENOTIC_SWING at the
+// model's capped excursion; the second (fused) cusp swings only
+// STENOTIC_SECOND of that, so the orifice is narrow and eccentric (about a
+// third of the normal opening between the drawn cusps). They are drawn
+// thicker, in a calcified colour, with nodules.
+export const STENOTIC_SWING = (75 * Math.PI) / 180;
+export const STENOTIC_SECOND = 0.8;
 
 // A point drawn at small + s * (large - small) of its chamber's driver; a
 // point without a driver is fixed. [x, y] pairs in a 640 x 800 view box.
@@ -388,11 +398,15 @@ export function heart2dState({
       sample,
     ),
     leak: leakStrength(sample),
+    stenosis: {
+      level: stenosisLevel(sample),
+      maxOpening: sample.valves?.aortic?.maxOpening ?? 1,
+    },
   };
 }
 
 // Geometry for one state, as plain data (tested without a DOM).
-export function heart2dGeometry({ s, valves, leak = 0 }) {
+export function heart2dGeometry({ s, valves, leak = 0, stenosis = null }) {
   const at = (point) => place(point, s);
   const muscles = Object.fromEntries(
     Object.entries(MUSCLES).map(([id, m]) => {
@@ -424,22 +438,32 @@ export function heart2dGeometry({ s, valves, leak = 0 }) {
   );
   // Semilunar cusps: closed they meet in the middle of the root, bulging
   // toward the ventricle; open they fold up against the root's walls.
-  const cusps = (valve, [a, b]) => {
+  const cusps = (valve, [a, b], stiff = null) => {
     const open = ease(valves[valve] ?? 0),
       centre = mix(a, b, 0.5);
     const closedTip = [centre[0], centre[1] + 4],
       openTip = (p, side) => [p[0] + side * 4, p[1] - 34];
     return [a, b].map((hinge, i) => {
       const side = i ? -1 : 1;
-      const tip = mix(closedTip, openTip(hinge, side), open);
-      const control = mix(
-        [mix(hinge, closedTip, 0.5)[0], hinge[1] + 20],
+      const closedControl = [mix(hinge, closedTip, 0.5)[0], hinge[1] + 20];
+      let tip = mix(closedTip, openTip(hinge, side), open);
+      let control = mix(
+        closedControl,
         [hinge[0] + side * 12, hinge[1] - 14],
         open,
       );
-      return { hinge, tip, control };
+      if (stiff) {
+        // Its own excursion (0..1 of the capped opening) turns the rigid
+        // closed cusp toward the outflow (up): counter-clockwise on the left.
+        const x = ease(clamp((valves[valve] ?? 0) / stiff.maxOpening, 0, 1));
+        const angle = -side * STENOTIC_SWING * (i ? STENOTIC_SECOND : 1) * x;
+        tip = mix(tip, rotate(closedTip, hinge, angle), stiff.level);
+        control = mix(control, rotate(closedControl, hinge, angle), stiff.level);
+      }
+      return { hinge, tip, control, calcified: !!stiff };
     });
   };
+  const stiff = stenosis?.level > 0 && stenosis.maxOpening > 0 ? stenosis : null;
   return {
     shell: smoothPath(SHELL.map(at)),
     cavities: Object.fromEntries(
@@ -451,7 +475,7 @@ export function heart2dGeometry({ s, valves, leak = 0 }) {
     muscles,
     leaflets,
     jet: jetGeometry(leak),
-    aortic: cusps("aortic", AO),
+    aortic: cusps("aortic", AO, stiff),
     pulmonary: cusps("pulmonary", PU),
     // Orifices move with the atrial walls around them.
     orifices: {
@@ -470,6 +494,13 @@ export function heart2dGeometry({ s, valves, leak = 0 }) {
   };
 }
 
+const rotate = (p, about, angle) => {
+  const dx = p[0] - about[0],
+    dy = p[1] - about[1],
+    c = Math.cos(angle),
+    sn = Math.sin(angle);
+  return [about[0] + dx * c - dy * sn, about[1] + dx * sn + dy * c];
+};
 const quad = (a, c, b) => `M${a[0]},${a[1]}Q${c[0]},${c[1]} ${b[0]},${b[1]}`;
 const point = (a, c, b, t) => [
   (1 - t) ** 2 * a[0] + 2 * (1 - t) * t * c[0] + t * t * b[0],
@@ -551,6 +582,9 @@ const COLOURS = {
   shellEdge: "#f19999",
   valve: "#fffdfb",
   valveShadow: "#4a3a45",
+  calcified: "#f1e4c3",
+  calcium: "#e2cb8c",
+  calciumEdge: "#9c8350",
 };
 
 // Static drawing (vessels behind and in front of the heart), built once.
@@ -974,8 +1008,10 @@ export class Heart2DView {
       ];
     }
     this.cuspPaths = { aortic: [], pulmonary: [] };
+    this.nodules = [];
     const cuspGroup = (valve, parent) => {
       const g = el("g", { class: "h2d-pick", "data-structure": valve }, parent);
+      if (valve === "aortic") this.aorticCusps = g;
       for (let i = 0; i < 2; i++)
         this.cuspPaths[valve].push([
           el(
@@ -1003,6 +1039,15 @@ export class Heart2DView {
         ]);
     };
     cuspGroup("aortic", heart);
+    // CC-47: calcific nodules on stenotic aortic cusps (shown only then).
+    for (let i = 0; i < 2; i++)
+      this.nodules.push(
+        el(
+          "circle",
+          { r: 2.6, fill: C.calcium, stroke: C.calciumEdge, "stroke-width": 0.8, display: "none" },
+          this.aorticCusps,
+        ),
+      );
     // In front: the pulmonary trunk with its right and left branches, and the
     // pulmonary root with its valve.
     const front = el("g", { filter: "url(#h2d-shadow)" }, svg);
@@ -1234,6 +1279,7 @@ export class Heart2DView {
         const d = quad(cusp.hinge, cusp.control, cusp.tip);
         for (const p of this.cuspPaths[valve][i]) p.setAttribute("d", d);
       });
+    this.drawCalcification(g.aortic);
     this.drawJet(g.jet, frame.t);
     if (this.selection) this.drawSelection();
     const phase = frame.sample?.phase?.name;
@@ -1241,6 +1287,28 @@ export class Heart2DView {
       .map((b) => b > 0.5)
       .join()}|${this.state.leak > 0.02}`;
     if (key !== this.described) this.describe();
+  }
+
+  // CC-47: stenotic aortic cusps are thicker and calcified, with a nodule
+  // on the body of each cusp.
+  drawCalcification(cusps) {
+    const on = cusps.some((c) => c.calcified);
+    if (on !== this.calcified) {
+      this.calcified = on;
+      this.svg.dataset.aorticCalcified = on ? "1" : "0";
+      this.cuspPaths.aortic.forEach(([shadow, body]) => {
+        shadow.setAttribute("stroke-width", on ? 11.5 : 10);
+        body.setAttribute("stroke-width", on ? 10 : 8.5);
+        body.setAttribute("stroke", on ? COLOURS.calcified : COLOURS.valve);
+      });
+      for (const n of this.nodules) n.setAttribute("display", on ? "inline" : "none");
+    }
+    if (!on) return;
+    cusps.forEach((c, i) => {
+      const [x, y] = point(c.hinge, c.control, c.tip, 0.6);
+      this.nodules[i].setAttribute("cx", x.toFixed(1));
+      this.nodules[i].setAttribute("cy", y.toFixed(1));
+    });
   }
 
   // The leak: a violet plume from the closed mitral valve into the left

@@ -29,6 +29,8 @@ const AUTHOR = { name: "于快", email: "yukuai@gmc.edu.cn", site: "https://www.
 // Mini program wording that differs from the website (owner, 2026-10-09).
 const OVERRIDES = {
   zh: {
+    // The share card title (the website dropped this banner line on 2026-10-10).
+    title: "一次心跳，贯通所有联系。",
     heartAtlas: "三维心脏",
     atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒\n载入后：单指拖动旋转心脏；双指捏合缩放，双指同时拖动可平移心脏。",
     atlasFailed: "三维心脏模型载入失败，已改用二维心脏。",
@@ -57,6 +59,7 @@ const OVERRIDES = {
     copyFailed: "请长按文字复制",
   },
   en: {
+    title: "One heartbeat. Every connection.",
     heartAtlas: "3D heart",
     atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds\nThen: drag with one finger to turn the heart; pinch with two fingers to zoom, and drag with two fingers to move it.",
     atlasFailed: "The 3D heart could not load; showing the 2D heart.",
