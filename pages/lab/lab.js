@@ -13,6 +13,7 @@ import { Charts } from "../../engine/charts.js";
 import { Heart2DView } from "../../engine/heart2d.js";
 import { SvgElement, controls, adoptCanvas, devicePixelRatio } from "../../engine/mp-dom.js";
 import { SvgPainter } from "../../engine/svg-canvas.js";
+import { scenarioView } from "../../engine/scenario-views.js";
 
 const PRESETS = ["anatomy", "xray", "conduction", "filling", "flow"];
 const VERSION = "1.0.0"; // the website's package.json version this copy follows
@@ -249,14 +250,20 @@ Page({
   },
 
   // ---- model and drawing (as js/app.js rebuild / update / animate) ---------
-  // Whether every beat of the current model is the same (true for 10 of the 12
-  // scenarios; atrial fibrillation and complete heart block differ beat to beat).
+  // Whether every beat of the current model is the same (true for 10 of the 13
+  // scenarios; atrial fibrillation and complete heart block differ beat to beat,
+  // and the PFO scenario replays a Valsalva release every fourth beat, so beat 0
+  // is compared with each of the next seven).
   checkBeats() {
-    const { model, clock } = this, hr = clock.hr, mods = this.modifiers;
-    this.sameBeats = model.cycleDuration(hr, 0) === model.cycleDuration(hr, 1);
-    for (let k = 0; k < 16 && this.sameBeats; k++) {
-      const t = (model.cycleDuration(hr, 0) * k) / 16, a = model.sample(t, hr, mods, 0), b = model.sample(t, hr, mods, 1);
-      if (a.ecg !== b.ecg || a.volume.lv !== b.volume.lv || a.pressures.la !== b.pressures.la || a.pressures.lv !== b.pressures.lv) this.sameBeats = false;
+    const { model, clock } = this, hr = clock.hr, mods = this.modifiers, T = model.cycleDuration(hr, 0);
+    this.sameBeats = true;
+    for (let beat = 1; beat < 8 && this.sameBeats; beat++) {
+      if (model.cycleDuration(hr, beat) !== T) this.sameBeats = false;
+      for (let k = 0; k < 16 && this.sameBeats; k++) {
+        const t = (T * k) / 16, a = model.sample(t, hr, mods, 0), b = model.sample(t, hr, mods, beat);
+        if (a.ecg !== b.ecg || a.volume.lv !== b.volume.lv || ["la", "lv", "ra", "rv"].some((p) => a.pressures[p] !== b.pressures[p]) || a.interatrial?.open !== b.interatrial?.open)
+          this.sameBeats = false;
+      }
     }
     this.nextBeat = null;
   },
@@ -501,6 +508,8 @@ Page({
       ...Object.entries(s.pressures).map(([id, v]) => [i18n.t(`pressure.${id}`), `${v.toFixed(1)} mmHg`]),
       [i18n.t("lvVolume"), `${s.volume.lv.toFixed(1)} mL`],
       ...Object.entries(s.valves).map(([id, v]) => [i18n.t(id), `${i18n.t(v.open ? "open" : "closed")} · ΔP ${v.gradient.toFixed(1)} mmHg`]),
+      // The foramen ovale in the PFO scenario (as the website's values table).
+      ...(s.interatrial ? [[i18n.t("foramenOvale"), `${i18n.t(s.interatrial.open ? "foramenOpen" : "foramenClosed")} · RA−LA ${s.interatrial.gradient.toFixed(1)} mmHg`]] : []),
       ...Object.entries(s.ap ?? {}).map(([id, v]) => [i18n.t(id), `${Number(v).toFixed(1)} mV`]),
       [i18n.t("sounds"), Object.entries(s.sounds).filter(([, v]) => v > 0.08).map(([id]) => id.toUpperCase()).join(" · ") || i18n.t("noSound")],
     ];
@@ -988,6 +997,22 @@ Page({
     this.clock.setHR(scenario.hr);
     this.setData({ scenarioIndex: index });
     this.rebuild();
+    this.applyScenarioView(scenario.id);
+  },
+  // The 3D view that shows the scenario best (the website's js/scenario-views.js):
+  // conduction for rhythm and conduction disorders, blood flow for stenosis,
+  // regurgitation and the PFO, filling for HFrEF and bradycardia. A 3D heart
+  // still loading or parked behind the 2D heart takes it when it is shown.
+  applyScenarioView(id) {
+    const view = scenarioView(id);
+    if (!view) return;
+    this.setData({ preset: view.preset });
+    if (this.atlas) {
+      this.atlas.setPreset(view.preset);
+      if (this.atlas.wallOpacity !== view.wallOpacity) this.atlas.setWallOpacity(view.wallOpacity);
+      this.syncWall();
+      this.update(true, true);
+    } else if (this.parkedAtlas) this.parkedAtlas.presetPending = true;
   },
 });
 

@@ -179,6 +179,24 @@ export class Charts {
       const yy = (v) =>
         row.y + row.h * (1 - (v - row.min) / (row.max - row.min));
       if (row.key === "pressure") {
+        // CC-48 PFO: the right-to-left shunt window shaded under the traces.
+        const pfo = !!this.series[0]?.interatrial;
+        if (pfo) {
+          ctx.fillStyle = "rgba(69, 200, 245, 0.14)";
+          let from = null;
+          this.series.forEach((s, i) => {
+            const open = s.interatrial.open,
+              last = i === this.series.length - 1;
+            if (open && from === null) from = s.t;
+            if (from !== null && (!open || last)) {
+              const to = open ? T : s.t;
+              ctx.fillRect(x + (from / T) * pw, row.y, ((to - from) / T) * pw, row.h);
+              if (to - from > 0.12 * T)
+                text(ctx, this.i18n.t("shuntRightToLeft"), x + (((from + to) / 2) / T) * pw, row.y + 10, C.teal, 8, "center");
+              from = null;
+            }
+          });
+        }
         const keys =
           this.side === "left" ? ["ao", "lv", "la"] : ["pa", "rv", "ra"];
         keys.forEach((key, i) => {
@@ -196,6 +214,20 @@ export class Charts {
             8,
           );
         });
+        // CC-48 PFO: the other atrium dashed, so the RA-LA crossing that
+        // opens the flap is visible on either side's strip.
+        if (pfo) {
+          const other = this.side === "left" ? "ra" : "la";
+          ctx.setLineDash([4, 3]);
+          path(
+            ctx,
+            this.series.map((s) => [x + (s.t / T) * pw, yy(s.pressures[other])]),
+            C.teal,
+            1.3,
+          );
+          ctx.setLineDash([]);
+          text(ctx, other.toUpperCase() + " - -", x + 8 + 3 * 40, row.y + 10, C.teal, 8);
+        }
         if (this.side === "left") {
           for (const [tag, ref] of [
             ["a", 55],

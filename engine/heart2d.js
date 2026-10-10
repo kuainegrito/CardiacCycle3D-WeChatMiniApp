@@ -12,8 +12,9 @@ import { document } from "./mp-dom.js";
 import { ventricularVolumes } from "./ventricular-timing.js";
 import { atrialVolumeTargets } from "./atrial-targets.js";
 import { diseasedValveBlends, stenosisLevel } from "./valve-disease.js";
+import { shuntStrength } from "./foramen-ovale.js";
 
-export const HEART2D_VERSION = 4;
+export const HEART2D_VERSION = 5;
 const SVG = "http://www.w3.org/2000/svg";
 
 // Volume (mL) drawn as the small (s = 0) and large (s = 1) outline. Normal
@@ -398,6 +399,7 @@ export function heart2dState({
       sample,
     ),
     leak: leakStrength(sample),
+    interatrial: sample.interatrial ?? null,
     stenosis: {
       level: stenosisLevel(sample),
       maxOpening: sample.valves?.aortic?.maxOpening ?? 1,
@@ -406,7 +408,13 @@ export function heart2dState({
 }
 
 // Geometry for one state, as plain data (tested without a DOM).
-export function heart2dGeometry({ s, valves, leak = 0, stenosis = null }) {
+export function heart2dGeometry({
+  s,
+  valves,
+  leak = 0,
+  stenosis = null,
+  interatrial = null,
+}) {
   const at = (point) => place(point, s);
   const muscles = Object.fromEntries(
     Object.entries(MUSCLES).map(([id, m]) => {
@@ -476,6 +484,7 @@ export function heart2dGeometry({ s, valves, leak = 0, stenosis = null }) {
     leaflets,
     jet: jetGeometry(leak),
     aortic: cusps("aortic", AO, stiff),
+    pfo: pfoGeometry(interatrial),
     pulmonary: cusps("pulmonary", PU),
     // Orifices move with the atrial walls around them.
     orifices: {
@@ -527,6 +536,103 @@ export function jetOutline(jet, steps = 8) {
   const head = point(jet.base, jet.control, jet.tip, 1),
     cap = [head[0], head[1] - jet.endWidth * 0.45];
   return [...left, cap, ...right.reverse()];
+}
+
+// CC-48: patent foramen ovale. The fossa ovalis is drawn where it lies in an
+// opened right atrium: an oval on the septal wall between the caval orifices,
+// nearer the IVC, ringed by its rim (limbus). The mechanism is shown in a
+// magnified cross-section in the free top-right corner: septum secundum hangs
+// from above on the RA side, the thin septum primum rises from below on the LA
+// side and overlaps it. While LA pressure exceeds RA pressure the flap lies
+// against secundum and the tunnel between them is shut; when RA pressure rises
+// above LA pressure (the model's Valsalva-release beat) the flap's free edge
+// swings into the LA and blood carrying contrast bubbles crosses right to
+// left. Bubbles stand for agitated-saline contrast, as in a bubble study.
+export const FOSSA = Object.freeze({ centre: [213, 420], rx: 14, ry: 21 });
+export const PFO_INSET = Object.freeze({ centre: [566, 84], r: 60 });
+// Bubble routes: IVC orifice -> the tunnel opening at the fossa's upper rim,
+// and in the LA from its septal side toward the mitral valve.
+export const PFO_ROUTES = Object.freeze({
+  ra: [[168, 466], [232, 458], [213, 403]],
+  la: [[352, 372], [392, 344], [442, 362]],
+});
+const SECUNDUM_HALF = [-13, -2]; // x range of septum secundum in the inset
+
+// Geometry of the PFO for one state (null when the scenario has no PFO).
+export function pfoGeometry(interatrial) {
+  if (!interatrial) return null;
+  // The flap swings further the more RA pressure exceeds LA (full at ~4 mmHg).
+  const reversal = Math.min(1, Math.sqrt(Math.max(0, interatrial.gradient ?? 0) / 4)),
+    open = ease(clamp(interatrial.blend ?? 0, 0, 1)) * (0.45 + 0.55 * reversal),
+    strength = shuntStrength({ interatrial });
+  const { centre: [cx, cy], rx, ry } = FOSSA;
+  // The tunnel opening under the rim: a crescent along the oval's upper
+  // inner edge, as thick as the flap is open.
+  const width = 1 + 7 * open,
+    outer = [],
+    inner = [];
+  for (let k = 0; k <= 10; k++) {
+    const a = Math.PI * (1.15 + 0.7 * (k / 10));
+    outer.push([cx + (rx - 2) * Math.cos(a), cy + (ry - 2) * Math.sin(a)]);
+    inner.push([cx + (rx - 2 - width * 0.55) * Math.cos(a), cy + (ry - 2 - width) * Math.sin(a)]);
+  }
+  const slit =
+    "M" + [...outer, ...inner.reverse()].map((p) => p.map((v) => v.toFixed(1)).join(",")).join("L") + "Z";
+  // Inset (local coordinates around PFO_INSET.centre): the flap is hinged
+  // low on the LA side and its free edge swings into the LA when open.
+  const { r } = PFO_INSET,
+    edge = (x) => Math.sqrt(r * r - x * x);
+  const flap = {
+    hinge: [2, edge(2)],
+    control: [2 + 6 * open, 8],
+    tip: [0.5 + 20 * open, -20 + 6 * open],
+  };
+  const [sl, sr] = SECUNDUM_HALF;
+  const secundum =
+    "M" + sl + "," + (-edge(sl)).toFixed(2) + "L" + sl + ",4Q" + sl + ",10 " + (sl + sr) / 2 +
+    ",10Q" + sr + ",10 " + sr + ",4L" + sr + "," + (-edge(sr)).toFixed(2) + "Z";
+  // From the RA under the free edge of secundum, up the tunnel between
+  // secundum and the flap, out into the LA above the flap (cubic).
+  const stream = {
+    start: [-22, 36],
+    c1: [-3, 24],
+    c2: [1 + 3 * open, -10],
+    end: [6 + 18 * open, -34],
+  };
+  return { open, strength, gradient: interatrial.gradient, shunting: !!interatrial.open, slit, flap, secundum, stream };
+}
+
+const cubicPoint = ({ start: a, c1: b, c2: c, end: d }, u) => {
+  const v = 1 - u;
+  return [0, 1].map(
+    (i) => v * v * v * a[i] + 3 * v * v * u * b[i] + 3 * v * u * u * c[i] + u * u * u * d[i],
+  );
+};
+
+// Positions of the contrast bubbles at time t (ms): those crossing (only
+// while the flap is open), and a few drifting in the RA half of the inset.
+export function pfoBubbles(pfo, t = 0) {
+  if (!pfo) return null;
+  const frac = (x) => x - Math.floor(x);
+  const along = ([a, c, b], u) => point(a, c, b, u);
+  const n = 6,
+    crossing = [],
+    resting = [];
+  for (let k = 0; k < n; k++) {
+    const u = frac(t / 900 + k / n);
+    crossing.push({
+      ra: along(PFO_ROUTES.ra, u),
+      la: along(PFO_ROUTES.la, frac(u + 0.5)),
+      inset: cubicPoint(pfo.stream, u),
+      // fade in at the start of a route and out at its end
+      alpha: pfo.strength * Math.min(1, u / 0.15, (1 - u) / 0.15),
+    });
+  }
+  for (let k = 0; k < 4; k++) {
+    const a = (2 * Math.PI * k) / 4 + t / 1400;
+    resting.push([-36 + 13 * Math.cos(a), 26 + 17 * Math.sin(a)]);
+  }
+  return { crossing, resting };
 }
 
 // The structures a learner can pick, with the keys of assets/heart-labels.
@@ -876,6 +982,31 @@ export class Heart2DView {
         ),
       ),
     };
+    // CC-48: the fossa ovalis with its tunnel opening, and the contrast
+    // bubbles in the RA and LA (shown only in the PFO scenario).
+    const pfoMain = (this.pfoMain = el(
+      "g",
+      { "pointer-events": "none", display: "none", "data-pfo": "main" },
+      heart,
+    ));
+    el(
+      "ellipse",
+      {
+        cx: FOSSA.centre[0],
+        cy: FOSSA.centre[1],
+        rx: FOSSA.rx,
+        ry: FOSSA.ry,
+        fill: "#9d6b8c",
+        "fill-opacity": 0.55,
+        stroke: "#f3d7e3",
+        "stroke-width": 3.2,
+      },
+      pfoMain,
+    );
+    this.pfoSlit = el("path", { fill: "#2a2440", "fill-opacity": 0.85 }, pfoMain);
+    this.pfoMainBubbles = Array.from({ length: 12 }, () =>
+      el("circle", { r: 3, fill: "#ffffff", stroke: "#8fb8e8", "stroke-width": 0.8 }, pfoMain),
+    );
     // The aortic root: the cut wall of the outflow tract with the aortic valve
     // at its base, left of the pulmonary root.
     const aorticRoot = el(
@@ -1104,6 +1235,50 @@ export class Heart2DView {
       t.dataset.structure = id;
       return t;
     });
+    // CC-48: the magnified cross-section of the PFO (top-right corner).
+    const [ix, iy] = PFO_INSET.centre,
+      ir = PFO_INSET.r;
+    const inset = (this.pfoInset = el(
+      "g",
+      {
+        transform: `translate(${ix} ${iy})`,
+        "pointer-events": "none",
+        display: "none",
+        "data-pfo": "inset",
+      },
+      svg,
+    ));
+    el("circle", { r: ir + 4, fill: "#0b1a2e", stroke: "#45c8f5", "stroke-width": 2.2 }, inset);
+    el("path", { d: `M0,${-ir}A${ir} ${ir} 0 0 0 0,${ir}Z`, fill: "url(#h2d-right)" }, inset);
+    el("path", { d: `M0,${-ir}A${ir} ${ir} 0 0 1 0,${ir}Z`, fill: "url(#h2d-left-atrium)" }, inset);
+    this.pfoStream = el(
+      "path",
+      { fill: "none", stroke: "#5b9bd5", "stroke-linecap": "round", opacity: 0 },
+      inset,
+    );
+    this.pfoSecundum = el(
+      "path",
+      { d: "", fill: "#e9a6ad", stroke: "#c97786", "stroke-width": 1.5 },
+      inset,
+    );
+    this.pfoFlap = el(
+      "path",
+      { fill: "none", stroke: "#fbe3e6", "stroke-width": 4.5, "stroke-linecap": "round" },
+      inset,
+    );
+    this.pfoInsetBubbles = Array.from({ length: 6 }, () =>
+      el("circle", { r: 2.6, fill: "#ffffff", stroke: "#8fb8e8", "stroke-width": 0.7 }, inset),
+    );
+    this.pfoRestingBubbles = Array.from({ length: 4 }, () =>
+      el("circle", { r: 2.4, fill: "#ffffff", "fill-opacity": 0.85 }, inset),
+    );
+    const insetLabel = { "font-family": "system-ui, sans-serif", "font-size": 13, "font-weight": 700, fill: "#ffffff", stroke: "rgba(40,24,48,0.55)", "stroke-width": 3, "paint-order": "stroke", "text-anchor": "middle" };
+    el("text", { ...insetLabel, x: -34, y: -24 }, inset).textContent = "RA";
+    el("text", { ...insetLabel, x: 34, y: 34 }, inset).textContent = "LA";
+    el("circle", { r: ir, fill: "none", stroke: "#45c8f5", "stroke-width": 1.2, "stroke-opacity": 0.6 }, inset);
+    const caption = { "font-family": "system-ui, sans-serif", "text-anchor": "middle", fill: "#dbe6f5", stroke: "rgba(8,18,34,0.85)", "stroke-width": 3, "paint-order": "stroke" };
+    this.pfoCaption = el("text", { ...caption, x: 0, y: ir + 20, "font-size": 14, "font-weight": 700 }, inset);
+    this.pfoGradient = el("text", { ...caption, x: 0, y: ir + 37, "font-size": 12.5 }, inset);
     this.selectionRing = el(
       "path",
       {
@@ -1281,12 +1456,58 @@ export class Heart2DView {
       });
     this.drawCalcification(g.aortic);
     this.drawJet(g.jet, frame.t);
+    this.drawPfo(g.pfo, frame);
     if (this.selection) this.drawSelection();
     const phase = frame.sample?.phase?.name;
     const key = `${phase?.en}|${Object.values(this.state.valves)
       .map((b) => b > 0.5)
-      .join()}|${this.state.leak > 0.02}`;
+      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}`;
     if (key !== this.described) this.describe();
+  }
+
+  // CC-48: the PFO in the RA and in the inset. Bubbles move with the model
+  // clock (a seek and playback draw the same picture).
+  drawPfo(pfo, frame) {
+    const shown = !!pfo;
+    if (shown !== this.pfoShown) {
+      this.pfoShown = shown;
+      this.pfoMain.setAttribute("display", shown ? "inline" : "none");
+      this.pfoInset.setAttribute("display", shown ? "inline" : "none");
+    }
+    this.svg.dataset.pfo = shown ? (pfo.shunting ? "open" : "closed") : "";
+    if (!shown) return;
+    const fixed = (p) => p.map((v) => v.toFixed(1)).join(",");
+    this.pfoSlit.setAttribute("d", pfo.slit);
+    this.pfoSlit.setAttribute("display", pfo.open > 0.02 ? "inline" : "none");
+    this.pfoSecundum.setAttribute("d", pfo.secundum);
+    this.pfoFlap.setAttribute("d", `M${fixed(pfo.flap.hinge)}Q${fixed(pfo.flap.control)} ${fixed(pfo.flap.tip)}`);
+    this.pfoStream.setAttribute("d", `M${fixed(pfo.stream.start)}C${fixed(pfo.stream.c1)} ${fixed(pfo.stream.c2)} ${fixed(pfo.stream.end)}`);
+    this.pfoStream.setAttribute("stroke-width", (2.5 + 4 * pfo.strength).toFixed(2));
+    this.pfoStream.setAttribute("opacity", (0.85 * pfo.strength).toFixed(3));
+    const bubbles = pfoBubbles(pfo, frame.t ?? 0);
+    bubbles.crossing.forEach((b, k) => {
+      const alpha = b.alpha.toFixed(3);
+      for (const [node, p] of [
+        [this.pfoMainBubbles[k], b.ra],
+        [this.pfoMainBubbles[k + 6], b.la],
+        [this.pfoInsetBubbles[k], b.inset],
+      ]) {
+        node.setAttribute("cx", p[0].toFixed(1));
+        node.setAttribute("cy", p[1].toFixed(1));
+        node.setAttribute("opacity", alpha);
+      }
+    });
+    bubbles.resting.forEach((p, k) => {
+      this.pfoRestingBubbles[k].setAttribute("cx", p[0].toFixed(1));
+      this.pfoRestingBubbles[k].setAttribute("cy", p[1].toFixed(1));
+    });
+    const zh = this.language === "zh",
+      g = pfo.gradient,
+      sign = g >= 0 ? "+" : "−";
+    this.pfoCaption.textContent = pfo.shunting
+      ? zh ? "卵圆孔：开放 · 右→左" : "PFO: open · R→L"
+      : zh ? "卵圆孔：关闭" : "PFO: closed";
+    this.pfoGradient.textContent = `${zh ? "右房−左房" : "RA−LA"} ${sign}${Math.abs(g).toFixed(1)} mmHg`;
   }
 
   // CC-47: stenotic aortic cusps are thicker and calcified, with a nodule
@@ -1346,7 +1567,17 @@ export class Heart2DView {
     this.svg.dataset.openValves = open.join(" ");
     this.described = `${phase?.en}|${Object.values(this.state.valves)
       .map((b) => b > 0.5)
-      .join()}|${this.state.leak > 0.02}`;
+      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}`;
+    const pfo = this.state.interatrial;
+    const pfoText = !pfo
+      ? ""
+      : pfo.open
+        ? zh
+          ? "卵圆孔开放：右房压高于左房压，带造影微泡的血液自右向左分流入左心房。"
+          : "The foramen ovale is open: right atrial pressure exceeds left, and blood with contrast bubbles shunts right to left into the left atrium. "
+        : zh
+          ? "卵圆孔瓣片关闭：左房压高于右房压。"
+          : "The foramen ovale flap is shut: left atrial pressure exceeds right. ";
     const names = open.map((v) => this.label(v)),
       leak = Number(this.svg.dataset.mitralLeak) > 0;
     if (this.quiet) {
@@ -1356,8 +1587,8 @@ export class Heart2DView {
       return;
     }
     this.desc.textContent = zh
-      ? `${phase?.zh ?? ""}。开放的瓣膜：${names.join("、") || "无"}。${leak ? "血液经二尖瓣反流入左心房。" : ""}心腔大小随模型容积变化。`
-      : `${phase?.en ?? ""}. Open valves: ${names.join(", ") || "none"}. ${leak ? "Blood leaks back through the mitral valve into the left atrium. " : ""}Chamber sizes follow the model volumes.`;
+      ? `${phase?.zh ?? ""}。开放的瓣膜：${names.join("、") || "无"}。${leak ? "血液经二尖瓣反流入左心房。" : ""}${pfoText}心腔大小随模型容积变化。`
+      : `${phase?.en ?? ""}. Open valves: ${names.join(", ") || "none"}. ${leak ? "Blood leaks back through the mitral valve into the left atrium. " : ""}${pfoText}Chamber sizes follow the model volumes.`;
   }
 
   // The lab's 3D interface, where it applies to a drawing.

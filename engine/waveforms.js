@@ -1,6 +1,7 @@
 import {valveStates} from './valves.js';
 import {conductionTiming,sampleConduction} from './conduction.js';
 import {reducedFillingFraction} from './reduced-filling.js';
+import {valsalvaRise,interatrialState} from './foramen-ovale.js';
 export const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 export const modulo=(x,T)=>((x%T)+T)%T;
 /** Periodic Catmull–Rom lookup, locally bounded to avoid overshooting flat volume limbs. */
@@ -89,6 +90,9 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
    if(r<100){pressures.lv+=(newA-oldA)*loadScale;pressures.rv+=(newA-oldA)*.5;}
    if(patch.completeBlock&&pressures.lv>pressures.la)pressures.la+=newA*2;
   }
+  // CC-48 PFO: a Valsalva-release beat lifts RA, RV and PA together (foramen-ovale.js).
+  const release=valsalvaRise(patch,beatIndex,m.t,m.T);
+  if(release){pressures.ra+=release;pressures.rv+=release;pressures.pa+=release;}
   return {...m,pressures,volume:{lv:lvVolume,rv:lvVolume},edv,esv,sv,ef:sv/edv*100,forwardSV:sv*(1-(patch.regurgitantFraction??0)),timing,absolute,modifiers:{preload,afterload,contractility}};
  }
  function sample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){
@@ -103,7 +107,10 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   let ecg=(sinceRapid<=rapidDuration?lookupWave('qrs',electricalRef):0)+(sinceQrs<=timing.qtMs?lookupWave('twave',qtRef):0);
   ecg+=patch.atrialFibrillation?lookupWave('afFibrillation',state.absolute):pAge<80*timing.atrialScale?lookupWave('p',pRef):0;
   if(patch.accessoryPathway&&sinceQrs<=60*timing.qrsScale)ecg+=lookupWave('delta',35+sinceQrs/timing.qrsScale);
-  const valves=valveStates(state.pressures,at=>pressureVolume(at,hr,modifiers,beatIndex).pressures,time,patch,phys.valveRampMs);
+  const recent=new Map(),pressureAt=at=>{let p=recent.get(at);if(!p){p=pressureVolume(at,hr,modifiers,beatIndex).pressures;recent.set(at,p);}return p;};
+  const valves=valveStates(state.pressures,pressureAt,time,patch,phys.valveRampMs);
+  // CC-48: the foramen-ovale flap shares the valves' pressure history.
+  const interatrial=patch.pfo?interatrialState(state.pressures,Array.from({length:15},(_,i)=>pressureAt(time-i*phys.valveRampMs/15)),patch):null;
   const ap={};
   for(const [id,table]of Object.entries(baseline.actionPotentials)){
    const atrial=['sa','atrial','av'].includes(id),offset=atrial?{sa:0,atrial:35,av:50}[id]:{purkinje:0,ventricular:10}[id];
@@ -114,7 +121,7 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   }
   const sounds={s1:lookupWave('s1',r),s2:lookupWave('s2',r),s3:lookupWave('s3',r)*(patch.s3??0),s4:lookupWave('s4',r)*(patch.s4??0),murmur:patch.murmur?lookupWave(patch.murmur==='ejection'?'murmurSystolic':'murmurHolosystolic',r)*.6:0};
   const conduction=sampleConduction(time,T,timing,patch,state.absolute);
-  return {...state,ecg,ap,sounds,valves,conduction,conductionTime:conduction.saRelative,scenarioId:scenario.id,erp:modulo(time-timing.qrsStart,T)<phys.ventricularErpMs*timing.rateScale,
+  return {...state,ecg,ap,sounds,valves,...(interatrial&&{interatrial}),conduction,conductionTime:conduction.saRelative,scenarioId:scenario.id,erp:modulo(time-timing.qrsStart,T)<phys.ventricularErpMs*timing.rateScale,
    pv:{espvrSlope:2.2*(patch.contractility??1)*(modifiers.contractility??1),edpvrStiffness:.025,volumeIntercept:10},atrialKick:patch.atrialKick===0||patch.completeBlock?0:phys.atrialKickMl};
  }
  const model={baseline,scenario,patch,sample,cycleDuration,phaseSchedule,lookup:lookupWave,

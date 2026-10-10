@@ -18,6 +18,7 @@ const ENGINE = [
   "clock.js",
   "atrial-targets.js",
   "valve-disease.js",
+  "foramen-ovale.js",
 ];
 // Modules that touch the DOM: [source, target, globals they use].
 const DOM_MODULES = [
@@ -28,6 +29,8 @@ const DOM_MODULES = [
 await mkdir("engine", { recursive: true });
 for (const file of ENGINE)
   await writeFile(join("engine", file), await readFile(join(web, "js/engine", file)));
+// Plain modules from the web app's js/ folder (no imports), copied unchanged.
+await writeFile(join("engine", "scenario-views.js"), await readFile(join(web, "js/scenario-views.js")));
 for (const [source, target, globals] of DOM_MODULES) {
   const code = (await readFile(join(web, source), "utf8")).replaceAll('from "./engine/', 'from "./');
   await writeFile(
@@ -46,4 +49,4 @@ await save("scenarios.js", await Promise.all(ids.map((id) => json(`content/scena
 await save("atrial-volume.js", await json("content/atlas-atrial-volume.json"));
 await save("labels.js", { en: await json("content/labels.en.json"), zh: await json("content/labels.zh.json") });
 await save("heart-labels.js", { en: await json("assets/heart-labels.en.json"), zh: await json("assets/heart-labels.zh.json") });
-console.log(`synced ${ENGINE.length + DOM_MODULES.length} engine files and 5 data modules`);
+console.log(`synced ${ENGINE.length + DOM_MODULES.length + 1} engine files and 5 data modules`);
