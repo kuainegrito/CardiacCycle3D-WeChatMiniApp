@@ -150,6 +150,7 @@ Page({
     atlasStatus: "",
     atlasReady: false,
     loadCard: null, // the 3D heart's loading card (renderLoadCard)
+    shuntKey: null, // PFO / ASD key under the heart (syncShuntKey)
     atlasStandby: false, // a 3D heart built behind the 2D heart is ready (buildAtlas)
     presets: [],
     preset: "anatomy",
@@ -460,6 +461,7 @@ Page({
       scenarioIndex: scenarios.indexOf(this.model.scenario),
     });
     wx.setNavigationBarTitle({ title: i18n.language === "zh" ? "心动周期" : "Cardiac Cycle" });
+    if (this.model) this.syncShuntKey();
     if (this.heart2d) {
       this.heart2d.setLanguage(i18n.language);
       this.atlas?.translate();
@@ -508,8 +510,10 @@ Page({
       ...Object.entries(s.pressures).map(([id, v]) => [i18n.t(`pressure.${id}`), `${v.toFixed(1)} mmHg`]),
       [i18n.t("lvVolume"), `${s.volume.lv.toFixed(1)} mL`],
       ...Object.entries(s.valves).map(([id, v]) => [i18n.t(id), `${i18n.t(v.open ? "open" : "closed")} · ΔP ${v.gradient.toFixed(1)} mmHg`]),
-      // The foramen ovale in the PFO scenario (as the website's values table).
-      ...(s.interatrial ? [[i18n.t("foramenOvale"), `${i18n.t(s.interatrial.open ? "foramenOpen" : "foramenClosed")} · RA−LA ${s.interatrial.gradient.toFixed(1)} mmHg`]] : []),
+      // The foramen ovale or the ASD (as the website's values table).
+      ...(s.interatrial ? [s.interatrial.defect === "asd"
+        ? [i18n.t("atrialSeptalDefect"), `${i18n.t("asdLeftToRight")} · LA−RA ${(-s.interatrial.gradient).toFixed(1)} mmHg`]
+        : [i18n.t("foramenOvale"), `${i18n.t(s.interatrial.open ? "foramenOpen" : "foramenClosed")} · RA−LA ${s.interatrial.gradient.toFixed(1)} mmHg`]] : []),
       ...Object.entries(s.ap ?? {}).map(([id, v]) => [i18n.t(id), `${Number(v).toFixed(1)} mV`]),
       [i18n.t("sounds"), Object.entries(s.sounds).filter(([, v]) => v > 0.08).map(([id]) => id.toUpperCase()).join(" · ") || i18n.t("noSound")],
     ];
@@ -748,6 +752,8 @@ Page({
         return;
       }
       this.atlas = view;
+      if (this.wantedCamera) view.setView(this.wantedCamera);
+      this.wantedCamera = null;
       this.endLoadCard();
       this.setData({ atlasReady: true, atlasStatus: "" });
       this.syncWall();
@@ -998,21 +1004,38 @@ Page({
     this.setData({ scenarioIndex: index });
     this.rebuild();
     this.applyScenarioView(scenario.id);
+    this.syncShuntKey();
   },
   // The 3D view that shows the scenario best (the website's js/scenario-views.js):
   // conduction for rhythm and conduction disorders, blood flow for stenosis,
   // regurgitation and the PFO, filling for HFrEF and bradycardia. A 3D heart
   // still loading or parked behind the 2D heart takes it when it is shown.
+  // The camera is one of the 3D heart's named views; a heart not yet shown
+  // takes it when it appears (startAtlas).
   applyScenarioView(id) {
     const view = scenarioView(id);
     if (!view) return;
     this.setData({ preset: view.preset });
+    this.wantedCamera = view.camera ?? null;
     if (this.atlas) {
       this.atlas.setPreset(view.preset);
       if (this.atlas.wallOpacity !== view.wallOpacity) this.atlas.setWallOpacity(view.wallOpacity);
+      if (this.wantedCamera) this.atlas.setView(this.wantedCamera);
+      this.wantedCamera = null;
       this.syncWall();
       this.update(true, true);
     } else if (this.parkedAtlas) this.parkedAtlas.presetPending = true;
+  },
+  // What the dots of the PFO / ASD mean (the website's key), under the heart.
+  syncShuntKey() {
+    const p = this.model?.patch ?? {},
+      defect = p.asd ? "asd" : p.pfo ? "pfo" : null;
+    this.setData({
+      shuntKey: defect && {
+        asd: defect === "asd",
+        text: i18n.t(defect === "asd" ? "shuntKeyAsd" : "shuntKeyBubbles") + (i18n.language === "zh" ? "；" : " · ") + i18n.t(defect === "asd" ? "shuntKeyAsdPath" : "shuntKeyPfoPath"),
+      },
+    });
   },
 });
 

@@ -1,5 +1,6 @@
 // Paints the SVG tree that heart2d.js builds (mp-dom.js SvgElement objects) on
 // a canvas 2d context. Covers what that drawing uses: path (M L H V C S Q T A Z), rect, ellipse, line, text, groups,
+// clip-path (one shape per <clipPath>, in the user space of the clipped element),
 // translate/rotate/scale transforms, linear/radial gradients, opacity, dashes,
 // paint-order on text and feDropShadow (applied per shape).
 
@@ -101,7 +102,7 @@ function pathBox(cmds) {
 
 const num = (v, d = 0) => (v === undefined || v === null || v === "" ? d : parseFloat(v));
 const INHERITED = ["fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-opacity", "stroke-opacity", "stroke-dasharray", "stroke-dashoffset", "font-family", "font-size", "font-weight", "paint-order", "text-anchor", "pointer-events"];
-const SKIP = new Set(["title", "desc", "defs", "stop", "filter", "feDropShadow", "linearGradient", "radialGradient"]);
+const SKIP = new Set(["title", "desc", "defs", "stop", "filter", "feDropShadow", "linearGradient", "radialGradient", "clipPath"]);
 
 function applyTransform(ctx, t) {
   if (!t) return;
@@ -182,6 +183,13 @@ export class SvgPainter {
     const pick = node.dataset?.structure ?? structure;
     ctx.save();
     applyTransform(ctx, a.transform);
+    // CC-50: the 2D heart clips each chamber's filling colour to its cavity.
+    const clip = /^url\(#([^)]+)\)$/.exec(a["clip-path"] ?? "");
+    if (clip) {
+      const shape = this.ids[clip[1]]?.children?.[0];
+      if (!shape || !this.geometry(ctx, shape)) return ctx.restore();
+      ctx.clip();
+    }
     if (node.tagName === "svg" || node.tagName === "g") {
       for (const c of node.children) this.draw(ctx, c, style, op, sh, pick);
     } else this.shape(ctx, node, style, op, sh, pick);
