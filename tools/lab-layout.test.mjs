@@ -1,0 +1,98 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { PlotResume } from "../engine/plot-resume.js";
+
+// Load the real page without launching model downloads or a native renderer.
+let definition;
+globalThis.Page = (page) => { definition = page; };
+globalThis.wx = { getWindowInfo: () => ({ pixelRatio: 1 }) };
+await import("../pages/lab/lab.js");
+delete globalThis.Page;
+
+function fixture(heartModel, pinned = true) {
+  const bindings = [];
+  const page = {
+    ...definition,
+    data: { ...definition.data, heartModel, pinned, docked: true },
+    canvases: { heartDock: { node: {} }, atlas: { node: {} } },
+    setData(values, callback) { Object.assign(this.data, values); callback?.(); },
+    async bindCanvas(id, type) {
+      bindings.push([id, type]);
+      this.canvases[id] = { node: {} };
+    },
+    update() {}, restartLoop() {},
+  };
+  return { page, bindings };
+}
+
+test("pinned 2D heart retains its native canvas through scrolling and reverse scrolling", async () => {
+  const { page, bindings } = fixture("2d");
+  const original = page.activeHeart();
+  // These offsets used to move the heart in and out of the dock, resetting it.
+  page.stageTop = 58;
+  for (const scrollTop of [0, 30, 59, 180, 800, 180, 59, 30, 0]) {
+    page.scrollTop = scrollTop;
+    await page.syncDock();
+    assert.equal(page.data.docked, true);
+    assert.equal(page.activeHeart(), original);
+  }
+  assert.deepEqual(bindings, []);
+});
+
+test("unpinning restores the inline heart; repinning binds the dock once", async () => {
+  const { page, bindings } = fixture("2d");
+  page.data.pinned = false;
+  await page.syncDock();
+  assert.equal(page.data.docked, false);
+  assert.equal(page.activeHeart(), page.canvases.heart);
+  for (const scrollTop of [0, 400, 0]) {
+    page.scrollTop = scrollTop;
+    await page.syncDock();
+    assert.equal(page.data.docked, false);
+  }
+  page.data.pinned = true;
+  await page.syncDock();
+  await page.syncDock();
+  assert.equal(page.activeHeart(), page.canvases.heartDock);
+  assert.deepEqual(bindings.map(([id]) => id), ["heart", "heartDock"]);
+});
+
+test("2D tabs remove and restore the heart; 3D tabs preserve the WebGL canvas", async () => {
+  const two = fixture("2d");
+  two.page.data.panel = "phases";
+  await two.page.syncDock();
+  assert.equal(two.page.data.docked, false);
+  assert.deepEqual(two.bindings, []);
+  two.page.data.panel = "heart";
+  await two.page.syncDock();
+  assert.deepEqual(two.bindings.map(([id]) => id), ["heartDock"]);
+
+  const three = fixture("atlas", false), original = three.page.canvases.atlas;
+  for (const panel of ["phases", "heart", "phases"]) {
+    three.page.data.panel = panel;
+    await three.page.syncDock();
+    assert.equal(three.page.data.docked, true);
+    assert.equal(three.page.canvases.atlas, original);
+  }
+  assert.deepEqual(three.bindings, []);
+});
+
+test("real mini page handlers auto-resume plot pauses and cancel on manual timeline actions", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { page } = fixture("2d");
+  page.clock = { playing: true, seek() {} };
+  page.charts = { inPlot: () => true, timeAt: x => x };
+  page.plotResume = new PlotResume(() => { page.clock.playing = true; });
+  const start = () => page.stripStart({ touches: [{ x: 150 }] });
+  start(); page.stripEnd();
+  assert.equal(page.clock.playing, false);
+  t.mock.timers.tick(6999); assert.equal(page.clock.playing, false);
+  t.mock.timers.tick(1); assert.equal(page.clock.playing, true);
+  start(); page.stripMove({ touches: [{ x: 180 }] });
+  t.mock.timers.tick(10000); assert.equal(page.clock.playing, false);
+  page.stripCancel();
+  page.onScrub({ detail: { value: 50 }, type: "change" });
+  t.mock.timers.tick(8000); assert.equal(page.clock.playing, false);
+  start(); page.stripEnd();
+  t.mock.timers.tick(8000); assert.equal(page.clock.playing, false);
+});

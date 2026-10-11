@@ -16,6 +16,7 @@ const ENGINE = [
   "reduced-filling.js",
   "ventricular-timing.js",
   "clock.js",
+  "plot-resume.js",
   "atrial-targets.js",
   "valve-disease.js",
   "foramen-ovale.js",

@@ -9,6 +9,8 @@ import heartLabels from "../../data/heart-labels.js";
 import atrialVolume from "../../data/atrial-volume.js";
 import { createModel } from "../../engine/waveforms.js";
 import { MasterClock } from "../../engine/clock.js";
+import { PlotResume } from "../../engine/plot-resume.js";
+import { HeartAudio } from "../../engine/heart-audio.js";
 import { Charts } from "../../engine/charts.js";
 import { Heart2DView } from "../../engine/heart2d.js";
 import { SvgElement, controls, adoptCanvas, devicePixelRatio } from "../../engine/mp-dom.js";
@@ -33,6 +35,7 @@ const OVERRIDES = {
     // The share card title (the website dropped this banner line on 2026-10-10).
     title: "一次心跳，贯通所有联系。",
     heartAtlas: "三维心脏",
+    audioUnavailable: "无法播放心音，请检查设备声音设置或更新微信。",
     atlasLoading: "正在载入三维心脏模型…请耐心等待大约10~30秒\n载入后：单指拖动旋转心脏；双指捏合缩放，双指同时拖动可平移心脏。",
     atlasFailed: "三维心脏模型载入失败，已改用二维心脏。",
     loadTitle: "正在载入三维心脏",
@@ -62,6 +65,7 @@ const OVERRIDES = {
   en: {
     title: "One heartbeat. Every connection.",
     heartAtlas: "3D heart",
+    audioUnavailable: "Cannot play heart sounds. Check device sound settings or update WeChat.",
     atlasLoading: "Loading the 3D heart model… please allow about 10–30 seconds\nThen: drag with one finger to turn the heart; pinch with two fingers to zoom, and drag with two fingers to move it.",
     atlasFailed: "The 3D heart could not load; showing the 2D heart.",
     loadTitle: "Loading the 3D heart",
@@ -130,7 +134,7 @@ const TEXT_KEYS = [
   "mobileHeart", "mobilePhases", "pinHeart", "pinHeartHint",
   "heartAtlas", "heart2d", "cyclePhases", "liveValues", "lvPressure", "lvVolume", "aorticPressure",
   "strokeVolume", "ef", "valveStates", "valveHint", "diastasisGone", "wiggers", "cursorHint", "leftHeart",
-  "rightHeart", "readValues",
+  "rightHeart", "readValues", "sounds", "muted", "unmuted",
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
   "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
@@ -183,12 +187,26 @@ Page({
     values: { lvp: "—", lvv: "—", aop: "—", sv: "—", ef: "—" },
     valves: [],
     soundCaption: "S1 · S2",
+    audioEnabled: false,
+    audioBusy: false,
     dialog: null, // "values" | "help"
     valueRows: [],
   },
 
   // ---- lifecycle -----------------------------------------------------------
   onLoad() {
+    this.plotResume = new PlotResume(() => {
+      if (!this.visible || this.unloaded) return;
+      this.clock.playing = true;
+      this.clock.lastNow = null;
+      this.update(true);
+    });
+    this.audio = new HeartAudio(wx, () => {
+      if (this.unloaded) return;
+      this.setData({ audioEnabled: false });
+      wx.showToast({ title: i18n.t("audioUnavailable"), icon: "none" });
+      if (this.sample) this.update(true);
+    });
     // The model download starts with the page, in parallel with the 2D setup.
     prefetchAtlas();
     this.atlasSteps = freshSteps();
@@ -216,7 +234,6 @@ Page({
       await this.attachPanel();
       this.visible = true;
       this.restartLoop();
-      this.measureStage();
       if (this.data.heartModel === "atlas") {
         await this.bindCanvas("atlas", "webgl");
         this.startAtlas({ auto: true });
@@ -228,6 +245,7 @@ Page({
     });
   },
   onShow() {
+    this.audio?.setActive(true);
     if (this.painter && !this.visible) {
       this.visible = true;
       this.clock.lastNow = null;
@@ -235,11 +253,15 @@ Page({
     }
   },
   onHide() {
+    this.plotResume?.cancel();
     this.visible = false;
+    this.audio?.setActive(false);
   },
   onUnload() {
+    this.plotResume?.cancel();
     this.visible = false;
     this.unloaded = true;
+    this.audio?.destroy();
     clearInterval(this.watchdog);
     this.chartObserver?.disconnect();
     wx.offMemoryWarning?.(this.onMemory);
@@ -297,6 +319,7 @@ Page({
   rebuild(prepared = null) {
     const { model, clock } = this;
     this.series = prepared ?? model.series(clock.hr, this.modifiers, clock.beatIndex, 400);
+    this.audio?.setCycle(this.series);
     const schedule = model.phaseSchedule(clock.hr, clock.beatIndex);
     this.charts?.setData(this.series, schedule, baseline, this.data.sideIndex ? "right" : "left");
     const T = model.cycleDuration(clock.hr, clock.beatIndex);
@@ -325,6 +348,7 @@ Page({
     // per-beat caches (e.g. the atrial volume table) stay warm across beats.
     const beat = this.sameBeats ? 0 : clock.beatIndex;
     const sample = (this.sample = model.sample(clock.t, clock.hr, this.modifiers, beat));
+    this.audio?.update(sample, this.visible && clock.playing, clock.beatIndex);
     if (this.charts) {
       const seen = this.chartsSeen;
       if (seen.strips || seen.pv) this.charts.update(sample, this.data.relations);
@@ -357,7 +381,7 @@ Page({
       valves: VALVES.map((id) => ({ id, name: i18n.t(id), open: sample.valves[id].open, state: i18n.t(sample.valves[id].open ? "open" : "closed") })),
       phaseIndex: sample.phaseIndex,
       currentPhase: i18n.local(sample.phase.name),
-      soundCaption: (sounds.join(" · ") || "S1 · S2") + "  ·  " + i18n.t("muted"),
+      soundCaption: (sounds.join(" · ") || "S1 · S2") + "  ·  " + i18n.t(this.audio?.enabled ? "unmuted" : "muted"),
     });
   },
   // ---- canvases ----------------------------------------------------------
@@ -466,7 +490,6 @@ Page({
       this.heart2d.setLanguage(i18n.language);
       this.atlas?.translate();
       this.rebuild();
-      wx.nextTick?.(() => this.measureStage());
     }
   },
   toggleLanguage() {
@@ -481,7 +504,6 @@ Page({
     this.setData({ panel }, async () => {
       await this.syncDock();
       await this.attachPanel();
-      this.measureStage();
     });
   },
   copyText(e) {
@@ -499,6 +521,7 @@ Page({
   },
   noop() {},
   readValues() {
+    this.plotResume?.cancel();
     this.clock.playing = false;
     this.update(true);
     const s = this.sample;
@@ -524,31 +547,13 @@ Page({
   togglePin() {
     if (this.data.heartModel === "atlas")
       return wx.showToast({ title: i18n.t("atlasPinned"), icon: "none" });
-    this.setData({ pinned: !this.data.pinned }, () => this.syncDock().then(() => this.measureStage()));
+    this.setData({ pinned: !this.data.pinned }, () => this.syncDock());
   },
-  // Pinning without sticky: once the page scrolls past the heart, the inline
-  // stage collapses and a docked copy is shown above the scroll area. The
-  // content below keeps its screen position because the scroll offset stays.
-  measureStage() {
-    if (this.data.docked) return;
-    const q = wx.createSelectorQuery().in(this);
-    q.select(".stage-slot").boundingClientRect();
-    q.select(".main").boundingClientRect();
-    q.select(".main").scrollOffset();
-    q.exec(([slot, main, offset]) => {
-      if (slot && main && offset && slot.height) this.stageTop = slot.top - main.top + offset.scrollTop;
-    });
-  },
-  onScroll(e) {
-    this.scrollTop = e.detail.scrollTop;
-    this.syncDock();
-  },
-  // The realistic heart has one WebGL canvas, in the dock, so while it is
-  // chosen the stage stays docked (on both tabs: closing the canvas would lose
-  // the WebGL scene).
+  // Keep a pinned heart in the dock from the outset. Moving a native canvas
+  // between the scroll area and dock destroys it and leaves a blank frame.
+  // Scrolling must never rebuild it. The 3D canvas also stays on both tabs.
   syncDock() {
-    const scrolled = this.data.pinned && this.stageTop !== undefined && (this.scrollTop ?? 0) > this.stageTop;
-    const docked = this.data.heartModel === "atlas" || (this.data.panel === "heart" && !!scrolled);
+    const docked = this.data.heartModel === "atlas" || (this.data.panel === "heart" && this.data.pinned);
     if (docked === this.data.docked) return Promise.resolve();
     this.canvases[docked ? "heart" : "heartDock"] = null; // the stage that is about to go
     return new Promise((resolve) =>
@@ -559,7 +564,6 @@ Page({
         } else if (this.data.panel === "heart") await this.bindCanvas("heart");
         this.update(true);
         this.restartLoop();
-        if (!docked) this.measureStage(); // first measurement when the page opened docked
         resolve();
       }),
     );
@@ -906,6 +910,7 @@ Page({
   },
   // Tap or drag on the plot (not the label gutter) seeks the shared clock.
   stripStart(e) {
+    this.plotResume.begin();
     const x = e.touches[0].x;
     this.drag = this.charts?.inPlot(x) ? { startX: x, active: false } : null;
   },
@@ -920,8 +925,14 @@ Page({
     if (this.drag && !this.drag.active) this.seekStrip(this.drag.startX, true);
     else if (this.drag) this.update(true, true); // place the 3D heart exactly
     this.drag = null;
+    this.plotResume.end();
+  },
+  stripCancel() {
+    this.drag = null;
+    this.plotResume.end();
   },
   seekStrip(x, final = false) {
+    this.plotResume.pause(this.clock.playing);
     this.clock.playing = false;
     this.clock.seek(this.charts.timeAt(x));
     this.update(true, final);
@@ -960,18 +971,29 @@ Page({
     const index = Number(e.currentTarget.dataset.index);
     const p = this.model.phaseSchedule(this.clock.hr, this.clock.beatIndex)[index];
     if (!p || p.duration < 1) return;
+    this.plotResume?.cancel();
     this.clock.playing = false;
     this.clock.seek(p.start + Math.min(2, p.duration / 2));
     this.update(true);
   },
 
   // ---- transport -----------------------------------------------------------
+  async toggleAudio(e) {
+    if (this.data.audioBusy) return;
+    this.setData({ audioBusy: true });
+    const audioEnabled = await this.audio.setEnabled(!!e.detail.value);
+    if (this.unloaded) return;
+    this.setData({ audioEnabled, audioBusy: false });
+    this.update(true);
+  },
   togglePlay() {
+    this.plotResume?.cancel();
     this.clock.playing = !this.clock.playing;
     this.clock.lastNow = null;
     this.update(true);
   },
   stepPhase(e) {
+    this.plotResume?.cancel();
     this.clock.playing = false;
     this.clock.stepPhase(Number(e.currentTarget.dataset.dir));
     this.update(true);
@@ -979,6 +1001,7 @@ Page({
   // Dragging the timeline redraws the traces and 2D heart at once; the 3D
   // heart follows at its own step rate and is placed exactly on release.
   onScrub(e) {
+    this.plotResume?.cancel();
     this.clock.playing = false;
     this.clock.seek(Number(e.detail.value));
     this.update(true, e.type === "change");
