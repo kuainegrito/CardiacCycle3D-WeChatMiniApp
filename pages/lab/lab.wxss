@@ -162,3 +162,8 @@
 .value-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid rgba(120,168,226,0.16); font-size: 11px; }
 .value-k { color: #94a5bf; }
 .value-v { color: #e9effa; text-align: right; }
+
+/* CC-48/49: what the PFO / ASD dots mean, under the heart (pages/lab/lab.js syncShuntKey). */
+.shunt-note { display: flex; align-items: flex-start; gap: 6px; padding: 6px 12px 2px; font-size: 10px; line-height: 14px; color: #94a5bf; }
+.shunt-note .key-dot { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; flex: none; background: #ffffff; box-shadow: 0 0 5px #8fb8e8; }
+.shunt-note.asd .key-dot { background: #ff8a70; box-shadow: 0 0 5px #ff8a70; }

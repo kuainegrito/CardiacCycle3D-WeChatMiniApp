@@ -14,8 +14,9 @@ import { ventricularVolumes } from "./ventricular-timing.js";
 import { atrialVolumeTargets } from "./atrial-targets.js";
 import { diseasedValveBlends, stenosisLevel } from "./valve-disease.js";
 import { shuntStrength } from "./foramen-ovale.js";
+import { fillState } from "./inflow.js";
 
-export const HEART2D_VERSION = 5;
+export const HEART2D_VERSION = 7;
 const SVG = "http://www.w3.org/2000/svg";
 
 // Volume (mL) drawn as the small (s = 0) and large (s = 1) outline. Normal
@@ -401,6 +402,10 @@ export function heart2dState({
     ),
     leak: leakStrength(sample),
     interatrial: sample.interatrial ?? null,
+    // CC-50: blood filling the chambers (js/inflow.js fillState).
+    filling: atrialSettings
+      ? fillState({ model, t, hr, beatIndex, modifiers, atrialSettings })
+      : null,
     stenosis: {
       level: stenosisLevel(sample),
       maxOpening: sample.valves?.aortic?.maxOpening ?? 1,
@@ -415,6 +420,7 @@ export function heart2dGeometry({
   leak = 0,
   stenosis = null,
   interatrial = null,
+  filling = null,
 }) {
   const at = (point) => place(point, s);
   const muscles = Object.fromEntries(
@@ -486,21 +492,26 @@ export function heart2dGeometry({
     jet: jetGeometry(leak),
     aortic: cusps("aortic", AO, stiff),
     pfo: pfoGeometry(interatrial),
+    filling: fillingGeometry(filling, s, leaflets),
     pulmonary: cusps("pulmonary", PU),
     // Orifices move with the atrial walls around them.
-    orifices: {
-      SVC: mix([166, 335], [162, 330], s.RA),
-      IVC: mix([164, 474], [160, 476], s.RA),
-      veins: [
-        [416, 266],
-        [441, 304],
-        [375, 343],
-        [350, 308],
-      ].map(([x, y], i) => [
-        x + (i % 2 ? 5 : -5) * (s.LA - 0.5),
-        y - 9 * (s.LA - 0.5),
-      ]),
-    },
+    orifices: orificePoints(s),
+  };
+}
+
+function orificePoints(s) {
+  return {
+    SVC: mix([166, 335], [162, 330], s.RA),
+    IVC: mix([164, 474], [160, 476], s.RA),
+    veins: [
+      [416, 266],
+      [441, 304],
+      [375, 343],
+      [350, 308],
+    ].map(([x, y], i) => [
+      x + (i % 2 ? 5 : -5) * (s.LA - 0.5),
+      y - 9 * (s.LA - 0.5),
+    ]),
   };
 }
 
@@ -557,11 +568,18 @@ export const PFO_ROUTES = Object.freeze({
   ra: [[168, 466], [232, 458], [213, 403]],
   la: [[352, 372], [392, 344], [442, 362]],
 });
+// CC-49 ASD: oxygenated blood leaves the LA toward its septal side and
+// emerges from the defect into the RA, heading for the tricuspid valve.
+export const ASD_ROUTES = Object.freeze({
+  ra: [[213, 420], [232, 470], [196, 492]],
+  la: [[442, 362], [392, 344], [352, 372]],
+});
 const SECUNDUM_HALF = [-13, -2]; // x range of septum secundum in the inset
 
-// Geometry of the PFO for one state (null when the scenario has no PFO).
+// Geometry of the PFO or (CC-49) the ASD for one state (null otherwise).
 export function pfoGeometry(interatrial) {
   if (!interatrial) return null;
+  if (interatrial.defect === "asd") return asdGeometry(interatrial);
   // The flap swings further the more RA pressure exceeds LA (full at ~4 mmHg).
   const reversal = Math.min(1, Math.sqrt(Math.max(0, interatrial.gradient ?? 0) / 4)),
     open = ease(clamp(interatrial.blend ?? 0, 0, 1)) * (0.45 + 0.55 * reversal),
@@ -610,6 +628,35 @@ const cubicPoint = ({ start: a, c1: b, c2: c, end: d }, u) => {
   );
 };
 
+// CC-49: a secundum ASD in the inset is a gap in the septum: tissue above
+// and below, and the oxygenated stream crossing from the LA (right) to the RA.
+function asdGeometry(interatrial) {
+  const { r } = PFO_INSET,
+    edge = (x) => Math.sqrt(r * r - x * x),
+    [sl, sr] = SECUNDUM_HALF,
+    mid = (sl + sr) / 2,
+    gap = 13;
+  const upper =
+    "M" + sl + "," + (-edge(sl)).toFixed(2) + "L" + sl + "," + (-gap - 4) + "Q" + sl + "," + -gap + " " + mid + "," + -gap +
+    "Q" + sr + "," + -gap + " " + sr + "," + (-gap - 4) + "L" + sr + "," + (-edge(sr)).toFixed(2) + "Z";
+  const leftToRight = interatrial.direction === "left-to-right";
+  return {
+    kind: "asd",
+    open: 1,
+    strength: shuntStrength({ interatrial }),
+    gradient: interatrial.gradient,
+    direction: interatrial.direction,
+    shunting: !!interatrial.direction,
+    slit: null,
+    secundum: upper,
+    // The lower rim of the defect, drawn as a septal band from below.
+    flap: { hinge: [mid, edge(mid)], control: [mid, 30], tip: [mid, gap + 2] },
+    stream: leftToRight
+      ? { start: [34, -6], c1: [14, -4], c2: [-12, 2], end: [-36, 16] }
+      : { start: [-36, 16], c1: [-12, 2], c2: [14, -4], end: [34, -6] },
+  };
+}
+
 // Positions of the contrast bubbles at time t (ms): those crossing (only
 // while the flap is open), and a few drifting in the RA half of the inset.
 export function pfoBubbles(pfo, t = 0) {
@@ -619,21 +666,156 @@ export function pfoBubbles(pfo, t = 0) {
   const n = 6,
     crossing = [],
     resting = [];
+  const asd = pfo.kind === "asd",
+    routes = asd ? ASD_ROUTES : PFO_ROUTES;
   for (let k = 0; k < n; k++) {
     const u = frac(t / 900 + k / n);
     crossing.push({
-      ra: along(PFO_ROUTES.ra, u),
-      la: along(PFO_ROUTES.la, frac(u + 0.5)),
+      // PFO: RA then LA (half a route later); ASD: LA then RA.
+      ra: along(routes.ra, asd ? frac(u + 0.5) : u),
+      la: along(routes.la, asd ? u : frac(u + 0.5)),
       inset: cubicPoint(pfo.stream, u),
       // fade in at the start of a route and out at its end
       alpha: pfo.strength * Math.min(1, u / 0.15, (1 - u) / 0.15),
     });
   }
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < (asd ? 0 : 4); k++) {
     const a = (2 * Math.PI * k) / 4 + t / 1400;
     resting.push([-36 + 13 * Math.cos(a), 26 + 17 * Math.sin(a)]);
   }
   return { crossing, resting };
+}
+
+// CC-50: blood filling the heart by the colour deepening, as in the owner's
+// reference animation and as the owner described it: the deeper colour starts
+// at the venae cavae (RA) and the pulmonary veins (LA), grows as circles that
+// merge and spread through the atrium, then enters each ventricle from its AV
+// valve. Coverage and depth come from js/inflow.js fillState (the model's own
+// volume flows); a circle grows with the volume that has arrived. Each
+// chamber's circles are one path (overlaps are not drawn twice) clipped to
+// the chamber's cavity, with a softer rim around it. In a ventricle the
+// colour starts between the open leaflet tips, and the pocket behind each
+// leaflet (between it and the wall, out to an arc around its hinge as far as
+// the tip) stays clear until the ventricle is nearly full; then it closes
+// from the tip toward the hinge (owner, 2026-10-11: "there should be no blood
+// behind the valve when the valves are opening, it is only when the
+// ventricles are nearly filled"). Every edge is a circle, an arc or a leaflet
+// (owner, 2026-10-11: straight edges looked flat).
+export const FILL_INLETS = Object.freeze({
+  // [point (or orifice key), share of the chamber's inflow]
+  RA: [["SVC", 0.42], ["IVC", 0.58]],
+  LA: [[0, 0.25], [1, 0.25], [2, 0.25], [3, 0.25]],
+  RV: [["tricuspid", 1]],
+  LV: [["mitral", 1]],
+});
+// The two leaflets of each AV valve, and the coverage from which the pockets
+// behind them fill.
+const FILL_VALVES = Object.freeze({
+  RV: ["tricuspid-anterior", "tricuspid-septal"],
+  LV: ["mitral-anterior", "mitral-posterior"],
+});
+export const POCKET_FROM = 0.8;
+// Radius (view-box units) that covers the whole chamber from its inlets.
+const FILL_REACH = Object.freeze({ RA: 128, LA: 100, RV: 290, LV: 240 });
+export const FILL_DEPTH = 0.72; // opacity of the deeper colour at full depth
+
+const circlePath = ([x, y], r) =>
+  r > 0.2
+    ? `M${(x - r).toFixed(1)},${y.toFixed(1)}A${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(x + r).toFixed(1)},${y.toFixed(1)}A${r.toFixed(1)} ${r.toFixed(1)} 0 1 0 ${(x - r).toFixed(1)},${y.toFixed(1)}Z`
+    : "";
+
+// The pocket behind an open AV leaflet: the part of the circle around its
+// hinge, out to `radius`, on the far side of the leaflet from the opening c.
+// Bounded by the leaflet and by an arc swept from it away from the opening
+// (half a turn; the cavity clip keeps only what lies inside the ventricle).
+export function pocketOutline(l, c, radius) {
+  if (!(radius > 1)) return null;
+  const h = l.hinge,
+    dist = (p) => Math.hypot(p[0] - h[0], p[1] - h[1]);
+  const pts = [h];
+  for (let i = 1, prev = h; i <= 24; i++) {
+    const p = point(h, l.control, l.tip, i / 24);
+    if (dist(p) >= radius || i === 24) {
+      pts.push(dist(p) > radius ? mix(prev, p, (radius - dist(prev)) / (dist(p) - dist(prev))) : p);
+      break;
+    }
+    pts.push(p);
+    prev = p;
+  }
+  const end = pts[pts.length - 1],
+    v = [end[0] - h[0], end[1] - h[1]],
+    w = [c[0] - h[0], c[1] - h[1]],
+    turn = v[0] * w[1] - v[1] * w[0] > 0 ? -1 : 1,
+    a0 = Math.atan2(v[1], v[0]),
+    r = dist(end);
+  for (let i = 1; i <= 18; i++) {
+    const a = a0 + (turn * Math.PI * i) / 18;
+    pts.push([h[0] + r * Math.cos(a), h[1] + r * Math.sin(a)]);
+  }
+  return pts;
+}
+
+// Everywhere but the pockets: a large square with each pocket as a hole
+// (wound the other way, so the default fill rule leaves it out).
+const OPEN_SQUARE = "M-1000,-1000L2000,-1000L2000,2000L-1000,2000Z";
+function outsidePockets(pockets) {
+  const area = (pts) => pts.reduce((sum, p, i) => {
+    const q = pts[(i + 1) % pts.length];
+    return sum + p[0] * q[1] - q[0] * p[1];
+  }, 0);
+  return (
+    OPEN_SQUARE +
+    pockets
+      .filter(Boolean)
+      .map((pts) => "M" + (area(pts) > 0 ? [...pts].reverse() : pts).map((p) => p.map((v) => v.toFixed(1)).join(",")).join("L") + "Z")
+      .join("")
+  );
+}
+
+export function fillingGeometry(filling, s = {}, leaflets = null) {
+  if (!filling) return null;
+  const orifices = orificePoints({ RA: 1, LA: 1, ...s });
+  // A ventricle's inlet: the opening between its leaflet tips.
+  const opening = (valve) => {
+    const [a, b] = FILL_VALVES[valve === "tricuspid" ? "RV" : "LV"].map((id) => leaflets?.[id]);
+    return a && b ? mix(a.tip, b.tip, 0.5) : valve === "tricuspid" ? [192, 484] : [410, 360];
+  };
+  return Object.fromEntries(
+    Object.entries(FILL_INLETS).map(([chamber, inlets]) => {
+      const { coverage = 0, intensity = 0 } = filling[chamber] ?? {};
+      const points = inlets.map(([where, share]) => [
+        typeof where === "number" ? orifices.veins[where] : where === "tricuspid" || where === "mitral" ? opening(where) : orifices[where],
+        share,
+      ]);
+      // Circles grow with the volume that has arrived (a little faster than
+      // linearly, slower than by area, so the spread stays visible), each by
+      // its inlet's share; together they just cover the chamber when full.
+      const radius = (share, extra = 0) =>
+        FILL_REACH[chamber] * Math.pow(coverage, 0.65) * Math.sqrt(Math.min(1.2, share * inlets.length)) + extra;
+      // Ventricles: the pockets behind the leaflets, clear until the
+      // ventricle is nearly full, then closing from the tip to the hinge.
+      const valve = FILL_VALVES[chamber] && leaflets ? FILL_VALVES[chamber].map((id) => leaflets[id]) : null;
+      const late = ease(clamp((coverage - POCKET_FROM) / (1 - POCKET_FROM), 0, 1));
+      const reach = valve?.map((l) => Math.hypot(l.tip[0] - l.hinge[0], l.tip[1] - l.hinge[1]) * (1 - late));
+      const pockets = valve?.map((l, i) => pocketOutline(l, points[0][0], reach[i])) ?? null;
+      return [
+        chamber,
+        {
+          coverage,
+          intensity,
+          core: points.map(([p, share]) => circlePath(p, radius(share))).join(""),
+          rim: points.map(([p, share]) => circlePath(p, radius(share) > 0.2 ? radius(share, 9) : 0)).join(""),
+          pockets,
+          // what the core and the (softer, wider) rim may cover
+          open: pockets ? outsidePockets(pockets) : null,
+          openRim: pockets
+            ? outsidePockets(valve.map((l, i) => pocketOutline(l, points[0][0], reach[i] - 9)))
+            : null,
+          opacity: FILL_DEPTH * intensity,
+        },
+      ];
+    }),
+  );
 }
 
 // The structures a learner can pick, with the keys of assets/heart-labels.
@@ -657,6 +839,12 @@ export const HEART2D_STRUCTURES = Object.freeze([
 // animation (mauve right heart, salmon left); "safe" separates the sides by
 // brightness as well as hue (CIE L* differs by more than 15), like the
 // realistic heart's colour-blind-safe variant. Top and bottom gradient stops.
+// CC-50: the deeper colour of incoming blood, per palette and chamber.
+export const FILL_SHADES = Object.freeze({
+  classic: { RA: "#9c5f80", RV: "#9c5f80", LA: "#cf5c5c", LV: "#c44e4e" },
+  safe: { RA: "#7f4f75", RV: "#7f4f75", LA: "#e3726b", LV: "#d9635c" },
+});
+
 export const PALETTES = Object.freeze({
   classic: {
     right: ["#cda2b6", "#c58fa7"],
@@ -779,7 +967,7 @@ export class Heart2DView {
     }));
     this.title = el("title", { id: "heart2d-title" }, svg);
     this.desc = el("desc", { id: "heart2d-desc" }, svg);
-    const defs = el("defs", {}, svg);
+    const defs = (this.defs = el("defs", {}, svg));
     this.stops = {};
     const gradient = (id, key) => {
       const g = el("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
@@ -927,6 +1115,7 @@ export class Heart2DView {
       heart,
     );
     this.cavity = {};
+    this.fillLayer = null;
     for (const [id, fill] of [
       ["RA", "url(#h2d-right)"],
       ["RV", "url(#h2d-right)"],
@@ -944,6 +1133,7 @@ export class Heart2DView {
         },
         heart,
       );
+    this.fillLayer = el("g", { "data-filling": "1" }, heart);
     this.orifice = {
       SVC: el(
         "ellipse",
@@ -983,6 +1173,30 @@ export class Heart2DView {
         ),
       ),
     };
+    // CC-50: the deeper colour of incoming blood, over each cavity (clipped
+    // to it) and under the orifices, valves and labels.
+    this.fillShapes = {};
+    for (const id of Object.keys(FILL_INLETS)) {
+      const clip = el("clipPath", { id: `h2d-clip-${id}` }, this.defs);
+      const g = el("g", { "clip-path": `url(#h2d-clip-${id})`, "pointer-events": "none" }, this.fillLayer);
+      // Ventricles: the rim and the core also keep out of the pockets behind
+      // the leaflets (nested clips intersect).
+      const keepOut = (part) => {
+        if (!FILL_VALVES[id]) return [null, g];
+        const c = el("clipPath", { id: `h2d-${part}-${id}` }, this.defs);
+        return [el("path", { d: OPEN_SQUARE }, c), el("g", { "clip-path": `url(#h2d-${part}-${id})` }, g)];
+      };
+      const [openRim, rimGroup] = keepOut("open-rim"),
+        [open, coreGroup] = keepOut("open");
+      this.fillShapes[id] = {
+        clip: el("path", { d: "" }, clip),
+        open,
+        openRim,
+        rim: el("path", { d: "", "fill-opacity": 0 }, rimGroup),
+        core: el("path", { d: "", "fill-opacity": 0 }, coreGroup),
+      };
+    }
+    this.applyFillColours();
     // CC-48: the fossa ovalis with its tunnel opening, and the contrast
     // bubbles in the RA and LA (shown only in the PFO scenario).
     const pfoMain = (this.pfoMain = el(
@@ -990,7 +1204,7 @@ export class Heart2DView {
       { "pointer-events": "none", display: "none", "data-pfo": "main" },
       heart,
     ));
-    el(
+    this.pfoFossa = el(
       "ellipse",
       {
         cx: FOSSA.centre[0],
@@ -1309,6 +1523,7 @@ export class Heart2DView {
       this.stops[key][0].setAttribute("stop-color", top);
       this.stops[key][1].setAttribute("stop-color", bottom);
     }
+    this.applyFillColours();
   }
 
   setVisual({ colorSafe = true } = {}) {
@@ -1460,12 +1675,47 @@ export class Heart2DView {
     this.drawCalcification(g.aortic);
     this.drawJet(g.jet, frame.t);
     this.drawPfo(g.pfo, frame);
+    this.drawFilling(g.filling, g.cavities);
     if (this.selection) this.drawSelection();
     const phase = frame.sample?.phase?.name;
     const key = `${phase?.en}|${Object.values(this.state.valves)
       .map((b) => b > 0.5)
       .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}`;
     if (key !== this.described) this.describe();
+  }
+
+  // CC-50: the deeper colour of incoming blood (none without the atrial
+  // settings, e.g. in unit tests of the drawing).
+  drawFilling(filling, cavities) {
+    this.svg.dataset.filling = filling
+      ? Object.entries(filling).map(([id, f]) => `${id}:${f.coverage.toFixed(2)}/${f.intensity.toFixed(2)}`).join(" ")
+      : "";
+    for (const [id, shape] of Object.entries(this.fillShapes)) {
+      const f = filling?.[id],
+        on = !!f && f.opacity > 0.01 && !!f.core;
+      shape.core.setAttribute("display", on ? "inline" : "none");
+      shape.rim.setAttribute("display", on ? "inline" : "none");
+      if (!on) continue;
+      shape.clip.setAttribute("d", cavities[id]);
+      if (shape.open) {
+        shape.open.setAttribute("d", f.open ?? OPEN_SQUARE);
+        shape.openRim.setAttribute("d", f.openRim ?? OPEN_SQUARE);
+      }
+      shape.core.setAttribute("d", f.core);
+      shape.rim.setAttribute("d", f.rim);
+      shape.core.setAttribute("fill-opacity", f.opacity.toFixed(3));
+      shape.rim.setAttribute("fill-opacity", (f.opacity * 0.4).toFixed(3));
+    }
+  }
+
+  // Deeper shades of each palette's chamber colours.
+  applyFillColours() {
+    if (!this.fillShapes) return;
+    const shade = FILL_SHADES[this.visual.colorSafe ? "safe" : "classic"];
+    for (const [id, shape] of Object.entries(this.fillShapes)) {
+      shape.core.setAttribute("fill", shade[id]);
+      shape.rim.setAttribute("fill", shade[id]);
+    }
   }
 
   // CC-48: the PFO in the RA and in the inset. Bubbles move with the model
@@ -1477,11 +1727,27 @@ export class Heart2DView {
       this.pfoMain.setAttribute("display", shown ? "inline" : "none");
       this.pfoInset.setAttribute("display", shown ? "inline" : "none");
     }
-    this.svg.dataset.pfo = shown ? (pfo.shunting ? "open" : "closed") : "";
+    this.svg.dataset.pfo = shown ? (pfo.kind === "asd" ? "asd" : pfo.shunting ? "open" : "closed") : "";
     if (!shown) return;
+    // CC-49: the same elements draw the ASD (a hole, the septum around a gap,
+    // red oxygenated blood crossing left to right, no contrast bubbles).
+    const asd = pfo.kind === "asd";
+    if (asd !== this.pfoAsd) {
+      this.pfoAsd = asd;
+      this.pfoFossa.setAttribute("fill", asd ? "#1c1830" : "#9d6b8c");
+      this.pfoFossa.setAttribute("fill-opacity", asd ? 0.85 : 0.55);
+      this.pfoFlap.setAttribute("stroke", asd ? "#e9a6ad" : "#fbe3e6");
+      this.pfoFlap.setAttribute("stroke-width", asd ? 11 : 4.5);
+      this.pfoStream.setAttribute("stroke", asd ? "#e8705a" : "#5b9bd5");
+      for (const b of [...this.pfoMainBubbles, ...this.pfoInsetBubbles]) {
+        b.setAttribute("fill", asd ? "#ff8a70" : "#ffffff");
+        b.setAttribute("stroke", asd ? "#b8432f" : "#8fb8e8");
+      }
+      for (const b of this.pfoRestingBubbles) b.setAttribute("display", asd ? "none" : "inline");
+    }
     const fixed = (p) => p.map((v) => v.toFixed(1)).join(",");
-    this.pfoSlit.setAttribute("d", pfo.slit);
-    this.pfoSlit.setAttribute("display", pfo.open > 0.02 ? "inline" : "none");
+    if (pfo.slit) this.pfoSlit.setAttribute("d", pfo.slit);
+    this.pfoSlit.setAttribute("display", !asd && pfo.open > 0.02 ? "inline" : "none");
     this.pfoSecundum.setAttribute("d", pfo.secundum);
     this.pfoFlap.setAttribute("d", `M${fixed(pfo.flap.hinge)}Q${fixed(pfo.flap.control)} ${fixed(pfo.flap.tip)}`);
     this.pfoStream.setAttribute("d", `M${fixed(pfo.stream.start)}C${fixed(pfo.stream.c1)} ${fixed(pfo.stream.c2)} ${fixed(pfo.stream.end)}`);
@@ -1507,6 +1773,14 @@ export class Heart2DView {
     const zh = this.language === "zh",
       g = pfo.gradient,
       sign = g >= 0 ? "+" : "−";
+    if (asd) {
+      // LA - RA, positive while blood crosses left to right.
+      const d = -g,
+        ds = d >= 0 ? "+" : "−";
+      this.pfoCaption.textContent = zh ? "房间隔缺损：左→右分流" : "ASD: L→R shunt";
+      this.pfoGradient.textContent = `${zh ? "左房−右房" : "LA−RA"} ${ds}${Math.abs(d).toFixed(1)} mmHg`;
+      return;
+    }
     this.pfoCaption.textContent = pfo.shunting
       ? zh ? "卵圆孔：开放 · 右→左" : "PFO: open · R→L"
       : zh ? "卵圆孔：关闭" : "PFO: closed";
@@ -1574,6 +1848,10 @@ export class Heart2DView {
     const pfo = this.state.interatrial;
     const pfoText = !pfo
       ? ""
+      : pfo.defect === "asd"
+        ? zh
+          ? "房间隔缺损：左房压高于右房压，含氧血经缺损自左向右分流入右心房。"
+          : "Atrial septal defect: left atrial pressure exceeds right, and oxygenated blood crosses the defect left to right into the right atrium. "
       : pfo.open
         ? zh
           ? "卵圆孔开放：右房压高于左房压，带造影微泡的血液自右向左分流入左心房。"

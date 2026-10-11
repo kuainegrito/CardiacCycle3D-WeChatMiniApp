@@ -179,22 +179,24 @@ export class Charts {
       const yy = (v) =>
         row.y + row.h * (1 - (v - row.min) / (row.max - row.min));
       if (row.key === "pressure") {
-        // CC-48 PFO: the right-to-left shunt window shaded under the traces.
+        // CC-48/49 PFO and ASD: each shunt window shaded under the traces and
+        // labelled with its direction.
         const pfo = !!this.series[0]?.interatrial;
         if (pfo) {
           ctx.fillStyle = "rgba(69, 200, 245, 0.14)";
-          let from = null;
+          let from = null,
+            way = null;
           this.series.forEach((s, i) => {
-            const open = s.interatrial.open,
+            const dir = s.interatrial.open ? s.interatrial.direction : null,
               last = i === this.series.length - 1;
-            if (open && from === null) from = s.t;
-            if (from !== null && (!open || last)) {
-              const to = open ? T : s.t;
+            if (from !== null && (dir !== way || last)) {
+              const to = dir === way ? T : s.t;
               ctx.fillRect(x + (from / T) * pw, row.y, ((to - from) / T) * pw, row.h);
               if (to - from > 0.12 * T)
-                text(ctx, this.i18n.t("shuntRightToLeft"), x + (((from + to) / 2) / T) * pw, row.y + 10, C.teal, 8, "center");
+                text(ctx, this.i18n.t(way === "left-to-right" ? "shuntLeftToRight" : "shuntRightToLeft"), x + (((from + to) / 2) / T) * pw, row.y + 10, C.teal, 8, "center");
               from = null;
             }
+            if (dir && from === null) (from = s.t), (way = dir);
           });
         }
         const keys =

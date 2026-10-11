@@ -1,7 +1,7 @@
 import {valveStates} from './valves.js';
 import {conductionTiming,sampleConduction} from './conduction.js';
 import {reducedFillingFraction} from './reduced-filling.js';
-import {valsalvaRise,interatrialState} from './foramen-ovale.js';
+import {valsalvaRise,asdRise,interatrialState} from './foramen-ovale.js';
 export const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 export const modulo=(x,T)=>((x%T)+T)%T;
 /** Periodic Catmull–Rom lookup, locally bounded to avoid overshooting flat volume limbs. */
@@ -93,6 +93,9 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   // CC-48 PFO: a Valsalva-release beat lifts RA, RV and PA together (foramen-ovale.js).
   const release=valsalvaRise(patch,beatIndex,m.t,m.T);
   if(release){pressures.ra+=release;pressures.rv+=release;pressures.pa+=release;}
+  // CC-49 ASD: the right heart rises toward LA pressure (foramen-ovale.js asdRise).
+  const asd=asdRise(patch,pressures);
+  if(asd){pressures.ra+=asd;pressures.rv+=asd;pressures.pa+=asd;}
   return {...m,pressures,volume:{lv:lvVolume,rv:lvVolume},edv,esv,sv,ef:sv/edv*100,forwardSV:sv*(1-(patch.regurgitantFraction??0)),timing,absolute,modifiers:{preload,afterload,contractility}};
  }
  function sample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){
@@ -110,7 +113,7 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   const recent=new Map(),pressureAt=at=>{let p=recent.get(at);if(!p){p=pressureVolume(at,hr,modifiers,beatIndex).pressures;recent.set(at,p);}return p;};
   const valves=valveStates(state.pressures,pressureAt,time,patch,phys.valveRampMs);
   // CC-48: the foramen-ovale flap shares the valves' pressure history.
-  const interatrial=patch.pfo?interatrialState(state.pressures,Array.from({length:15},(_,i)=>pressureAt(time-i*phys.valveRampMs/15)),patch):null;
+  const interatrial=patch.pfo||patch.asd?interatrialState(state.pressures,Array.from({length:15},(_,i)=>pressureAt(time-i*phys.valveRampMs/15)),patch):null;
   const ap={};
   for(const [id,table]of Object.entries(baseline.actionPotentials)){
    const atrial=['sa','atrial','av'].includes(id),offset=atrial?{sa:0,atrial:35,av:50}[id]:{purkinje:0,ventricular:10}[id];
@@ -119,7 +122,8 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
    if(id==='sa'||id==='av')local=age/timing.atrialPeriod*800;
    ap[id]=patch.atrialFibrillation&&atrial?{sa:-55,atrial:-65,av:-50}[id]:lookup(table,Math.min(local,799.999));
   }
-  const sounds={s1:lookupWave('s1',r),s2:lookupWave('s2',r),s3:lookupWave('s3',r)*(patch.s3??0),s4:lookupWave('s4',r)*(patch.s4??0),murmur:patch.murmur?lookupWave(patch.murmur==='ejection'?'murmurSystolic':'murmurHolosystolic',r)*.6:0};
+  // splitS2Ms (CC-49 ASD): a pulmonary component that follows A2 by a fixed interval.
+  const sounds={s1:lookupWave('s1',r),s2:lookupWave('s2',r)+(patch.splitS2Ms?.85*lookupWave('s2',r-patch.splitS2Ms):0),s3:lookupWave('s3',r)*(patch.s3??0),s4:lookupWave('s4',r)*(patch.s4??0),murmur:patch.murmur?lookupWave(patch.murmur==='ejection'?'murmurSystolic':'murmurHolosystolic',r)*.6*(patch.murmurGain??1):0};
   const conduction=sampleConduction(time,T,timing,patch,state.absolute);
   return {...state,ecg,ap,sounds,valves,...(interatrial&&{interatrial}),conduction,conductionTime:conduction.saRelative,scenarioId:scenario.id,erp:modulo(time-timing.qrsStart,T)<phys.ventricularErpMs*timing.rateScale,
    pv:{espvrSlope:2.2*(patch.contractility??1)*(modifiers.contractility??1),edpvrStiffness:.025,volumeIntercept:10},atrialKick:patch.atrialKick===0||patch.completeBlock?0:phys.atrialKickMl};
