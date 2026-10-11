@@ -10,6 +10,7 @@ import atrialVolume from "../../data/atrial-volume.js";
 import { createModel } from "../../engine/waveforms.js";
 import { MasterClock } from "../../engine/clock.js";
 import { PlotResume } from "../../engine/plot-resume.js";
+import { selectPfoInspectionBeat } from "../../engine/pfo-inspection.js";
 import { HeartAudio } from "../../engine/heart-audio.js";
 import { Charts } from "../../engine/charts.js";
 import { Heart2DView } from "../../engine/heart2d.js";
@@ -932,9 +933,12 @@ Page({
     this.plotResume.end();
   },
   seekStrip(x, final = false) {
+    const t = this.charts.timeAt(x);
     this.plotResume.pause(this.clock.playing);
     this.clock.playing = false;
-    this.clock.seek(this.charts.timeAt(x));
+    const changed = selectPfoInspectionBeat(this.model, this.clock);
+    this.clock.seek(t);
+    if (changed) this.rebuild();
     this.update(true, final);
   },
   toggleRelations() {

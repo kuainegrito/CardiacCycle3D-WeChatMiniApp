@@ -33,7 +33,7 @@ for (const file of ENGINE)
   await writeFile(join("engine", file), await readFile(join(web, "js/engine", file)));
 // Plain modules from the web app's js/ folder, copied with their engine
 // import paths flattened (engine/ is one folder here).
-const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js"];
+const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js"];
 for (const file of PLAIN)
   await writeFile(join("engine", file), (await readFile(join(web, "js", file), "utf8")).replaceAll('from "./engine/', 'from "./'));
 for (const [source, target, globals] of DOM_MODULES) {

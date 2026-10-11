@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PlotResume } from "../engine/plot-resume.js";
+import { MasterClock } from "../engine/clock.js";
+import { createModel } from "../engine/waveforms.js";
+import baseline from "../data/baseline.js";
+import scenarios from "../data/scenarios.js";
 
 // Load the real page without launching model downloads or a native renderer.
 let definition;
@@ -24,6 +28,25 @@ function fixture(heartModel, pinned = true) {
   };
   return { page, bindings };
 }
+
+test("manual Wiggers inspection rebuilds the mini PFO release cycle once and preserves the picked time", () => {
+  const { page } = fixture("2d");
+  page.model = createModel(baseline, scenarios.find(s => s.id === "pfo"));
+  page.clock = new MasterClock(page.model);
+  page.charts = { timeAt: x => x };
+  page.plotResume = new PlotResume(() => {});
+  let rebuilds = 0;
+  page.rebuild = () => rebuilds++;
+  page.seekStrip(400, true);
+  assert.equal(page.clock.beatIndex, 3);
+  assert.equal(page.clock.t, 400);
+  assert.ok(page.model.sample(400, 75, {}, 3).interatrial.flow > 0);
+  page.seekStrip(500, true);
+  assert.equal(page.clock.beatIndex, 3);
+  assert.equal(page.clock.t, 500);
+  assert.equal(rebuilds, 1);
+  page.plotResume.cancel();
+});
 
 test("pinned 2D heart retains its native canvas through scrolling and reverse scrolling", async () => {
   const { page, bindings } = fixture("2d");
