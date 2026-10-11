@@ -16,11 +16,15 @@ view.syncPfo(await lab.model("pfo"));
 assert.ok(view.pfo?.visible);
 const membrane = view.pfo.group.getObjectByName("Septum primum tissue");
 assert.ok(membrane, "bundle contains the new septal membrane");
-const secundum = view.pfo.group.getObjectByName("Septum secundum — overlapping superior rim");
+const secundum = view.pfo.group.getObjectByName("Septum secundum — descending fold");
 secundum.geometry.computeBoundingBox();
 const section = secundum.geometry.boundingBox;
-assert.ok(section.max.z - section.min.z > 0.002, "bundle contains the muscular cutaway depth");
-assert.ok(section.max.z < 0, "muscular rim is offset behind the membrane");
+membrane.geometry.computeBoundingBox();
+const primum = membrane.geometry.boundingBox;
+assert.ok(section.min.y < primum.max.y && section.max.y > primum.max.y,
+  "upper muscular fold overlaps the inferior membrane, with staggered free margins");
+assert.ok(primum.min.y < section.min.y, "primum continues inferior to the overlap");
+assert.ok(Math.abs(section.max.x - primum.max.x) < 1e-7, "both tissues have the same section plane");
 assert.ok(secundum.material.depthTest && membrane.material.depthTest);
 const muscular = Array.from(secundum.geometry.attributes.position.array);
 const snapshot = () => Array.from(membrane.geometry.attributes.position.array);
@@ -34,8 +38,8 @@ assert.notDeepEqual(open, closed);
 assert.deepEqual(Array.from(secundum.geometry.attributes.position.array), muscular);
 assert.equal(membrane.parent.rotation.x, 0);
 for (let k = 0; k < closed.length; k += 3) {
-  assert.ok(open[k + 2] <= 0.002401);
-  if (closed[k + 1] < -0.001) assert.deepEqual(open.slice(k, k + 3), closed.slice(k, k + 3));
+  assert.ok(open[k + 2] - closed[k + 2] <= 0.001401);
+  if (closed[k + 1] < -0.0045) assert.deepEqual(open.slice(k, k + 3), closed.slice(k, k + 3));
 }
 const [ra, la] = view.pfo.group.children;
 assert.ok(ra.position.distanceTo(la.position) < 0.001);
@@ -49,4 +53,4 @@ assert.equal(membrane.parent.visible, false);
 assert.equal(secundum.visible, false);
 view.pfo.dispose();
 assert.equal(view.pfo.group.parent, null);
-console.log("Mini-program bundled PFO cutaway: thick offset tissue/closed/open/attached tissue/seek/ASD/cleanup pass");
+console.log("Mini-program bundled PFO overlap: staggered margins/shared section/closed/open/attached tissue/seek/ASD/cleanup pass");
