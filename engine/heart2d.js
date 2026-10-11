@@ -1,5 +1,6 @@
 // Copied by tools/sync-from-web.mjs from js/heart2d.js; only this line is added.
 import { document } from "./mp-dom.js";
+import { Conduction2D } from "./heart2d-conduction.js";
 // CC-30: the 2D heart. An original frontal-section drawing in the style of the
 // classic textbook animation the owner sent (a GIF of unknown licence: nothing
 // is copied, traced or embedded; the layout was measured as landmarks and
@@ -1207,6 +1208,7 @@ export class Heart2DView {
       rootBox,
     );
     cuspGroup("pulmonary", rootBox);
+    this.conductionView = new Conduction2D(svg, el);
     // Labels: short, light, never in the way of the valves.
     this.text = el(
       "g",
@@ -1409,6 +1411,7 @@ export class Heart2DView {
       atrialSettings: this.atrialSettings,
     });
     const g = (this.geometry = heart2dGeometry(this.state));
+    this.conductionView.update(frame.sample?.conduction, this.state.s);
     this.shell.setAttribute("d", g.shell);
     for (const [id, d] of Object.entries(g.cavities))
       this.cavity[id].setAttribute("d", d);
@@ -1587,8 +1590,8 @@ export class Heart2DView {
       return;
     }
     this.desc.textContent = zh
-      ? `${phase?.zh ?? ""}。开放的瓣膜：${names.join("、") || "无"}。${leak ? "血液经二尖瓣反流入左心房。" : ""}${pfoText}心腔大小随模型容积变化。`
-      : `${phase?.en ?? ""}. Open valves: ${names.join(", ") || "none"}. ${leak ? "Blood leaks back through the mitral valve into the left atrium. " : ""}${pfoText}Chamber sizes follow the model volumes.`;
+      ? `${phase?.zh ?? ""}。开放的瓣膜：${names.join("、") || "无"}。${leak ? "血液经二尖瓣反流入左心房。" : ""}${pfoText}黄色脉冲显示电传导。心腔大小随模型容积变化。`
+      : `${phase?.en ?? ""}. Open valves: ${names.join(", ") || "none"}. ${leak ? "Blood leaks back through the mitral valve into the left atrium. " : ""}${pfoText}Yellow pulses show electrical conduction. Chamber sizes follow the model volumes.`;
   }
 
   // The lab's 3D interface, where it applies to a drawing.
