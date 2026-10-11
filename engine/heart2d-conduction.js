@@ -99,8 +99,8 @@ const routes = [
       p(518, 670, "LV", 12, 25),
       p(551, 642, "LV", 32, 33),
       p(553, 572, "LV", 45, 37),
-      p(529, 493, "LV", 50, 22),
-      p(498, 424, "LV", 46, 10),
+      p(539, 493, "LV", 52, 22),
+      p(510, 424, "LV", 45, 8),
     ],
   },
   {
@@ -111,7 +111,7 @@ const routes = [
     points: [
       p(442, 330, "LA", 8, -2),
       p(484, 355, "LV", 15, 0),
-      p(498, 424, "LV", 46, 10),
+      p(510, 424, "LV", 45, 8),
     ],
   },
 ];
@@ -120,6 +120,11 @@ for (const side of ["right", "left"]) {
   const wall = routes.find((r) => r.id === `${side}-purkinje`);
   wall.points.slice(1).forEach((root, i) => {
     const sign = side === "left" ? -1 : 1;
+    // LV twigs stay short within the thin lateral myocardium. The basal
+    // twig follows its narrow wall instead of extending into the cavity.
+    const basal = side === "left" && i === wall.points.length - 2;
+    const dx1 = side === "left" ? (basal ? 1 : 4) : 12;
+    const dx2 = side === "left" ? (basal ? 3 : 6) : 22;
     routes.push({
       id: `${side}-twig-${i}`,
       clock: "ventricular",
@@ -128,8 +133,8 @@ for (const side of ["right", "left"]) {
       end: 60 + i * 9,
       points: [
         root,
-        { ...root, x: root.x + sign * 12, y: root.y - 17 },
-        { ...root, x: root.x + sign * 22, y: root.y - 9 },
+        { ...root, x: root.x + sign * dx1, y: root.y - (basal ? 6 : 12) },
+        { ...root, x: root.x + sign * dx2, y: root.y - (basal ? 4 : 6) },
       ],
     });
   });
