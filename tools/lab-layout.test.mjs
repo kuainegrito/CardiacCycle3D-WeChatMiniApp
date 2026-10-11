@@ -29,6 +29,32 @@ function fixture(heartModel, pinned = true) {
   return { page, bindings };
 }
 
+test("PFO atlas reuses motion tables across beats without freezing release or bubble time", () => {
+  const { page } = fixture("atlas");
+  const model = createModel(baseline, scenarios.find(s => s.id === "pfo"));
+  const frames = [];
+  page.atlas = { setVisual() {}, update(frame) { frames.push(frame); } };
+  for (let beat = 0; beat < 8; beat++) {
+    const t = 400, sample = model.sample(t, 75, {}, beat);
+    page.stepAtlas({ model, sample, t, hr: 75, beatIndex: beat, modifiers: {}, baseline }, true);
+    assert.equal(frames.at(-1).beatIndex, 0);
+    assert.equal(frames.at(-1).sample, sample);
+    assert.equal(sample.interatrial.flow > 0, beat % 4 === 3);
+    assert.equal(sample.absolute, beat * 800 + t);
+    for (let k = 0; k < 40; k++) {
+      const a = model.sample(k * 20, 75, {}, 0), b = model.sample(k * 20, 75, {}, beat);
+      assert.deepEqual(a.volume, b.volume);
+      for (const valve of ["mitral", "aortic", "tricuspid", "pulmonary"]) {
+        assert.equal(a.valves[valve].open, b.valves[valve].open);
+        assert.ok(Math.abs(a.valves[valve].blend - b.valves[valve].blend) < 1e-10);
+      }
+    }
+  }
+  const normal = createModel(baseline, scenarios.find(s => s.id === "normal"));
+  page.stepAtlas({ model: normal, beatIndex: 7 }, true);
+  assert.equal(frames.at(-1).beatIndex, 7);
+});
+
 test("manual Wiggers inspection rebuilds the mini PFO release cycle once and preserves the picked time", () => {
   const { page } = fixture("2d");
   page.model = createModel(baseline, scenarios.find(s => s.id === "pfo"));

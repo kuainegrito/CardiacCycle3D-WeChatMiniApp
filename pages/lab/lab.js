@@ -430,7 +430,16 @@ Page({
     atlas.setVisual({ colorSafe: this.data.colorSafe, repolarization: this.data.repolarization, erp: this.data.erpOn });
     if (this.atlasDragging && !force) return;
     if (!force && now - (this.atlasStepAt ?? 0) < (this.atlasCost ?? 0) / 0.75) return;
-    atlas.update(frame);
+    // PFO's Valsalva release shifts RA/RV/PA pressures together, leaving
+    // valve gradients and chamber volume curves unchanged. Reuse beat-zero
+    // motion/flow tables instead of rebuilding hundreds of samples at every
+    // beat boundary. Keep the real sample (including interatrial state and
+    // absolute time) so the flap, shunt and bubbles remain intermittent.
+    const patch = frame.model?.patch;
+    const repeatingPfo = patch?.pfo && !patch.asd && !patch.rrSequence && !patch.atrialFibrillation && !patch.completeBlock;
+    if (repeatingPfo && this.atlasPfoBeat !== frame.beatIndex) atlas.stateKey = undefined;
+    this.atlasPfoBeat = repeatingPfo ? frame.beatIndex : undefined;
+    atlas.update(repeatingPfo ? { ...frame, beatIndex: 0 } : frame);
     const cost = Date.now() - now;
     this.atlasCost = this.atlasCost === undefined ? cost : this.atlasCost * 0.8 + cost * 0.2;
     this.atlasStepAt = now;

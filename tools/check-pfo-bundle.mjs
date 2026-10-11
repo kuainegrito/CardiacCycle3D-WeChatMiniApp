@@ -53,4 +53,30 @@ assert.equal(membrane.parent.visible, false);
 assert.equal(secundum.visible, false);
 view.pfo.dispose();
 assert.equal(view.pfo.group.parent, null);
+// Exercise the actual bundle's motion pipeline through the page's optimized
+// frame, counting sampling work instead of relying on desktop timing noise.
+let page;
+globalThis.Page = value => { page = value; };
+globalThis.wx = { getWindowInfo: () => ({ pixelRatio: 1 }) };
+await import("../pages/lab/lab.js");
+delete globalThis.Page;
+const model = await lab.model("pfo"), originalSample = model.sample;
+let calls = 0;
+model.sample = (...args) => { calls++; return originalSample(...args); };
+view.pfo = undefined;
+view.describe = () => {};
+view.render = () => {};
+view.setVisual = () => {};
+const host = { ...page, data: {}, atlas: view };
+const costs = [];
+for (let beat = 0; beat < 8; beat++) {
+  const sample = model.sample(400, 75, {}, beat);
+  calls = 0;
+  host.stepAtlas({ model, sample, t: 400, hr: 75, beatIndex: beat, modifiers: {}, baseline: lab.baseline }, true);
+  costs.push(calls);
+  assert.equal(view.pfo.strength > 0, beat % 4 === 3);
+  if (beat > 0) assert.ok(calls < 100, `beat ${beat} avoids full-cycle motion table rebuild (${calls} samples)`);
+}
+model.sample = originalSample;
+console.log("PFO motion sampling work per beat:", costs.join(", "));
 console.log("Mini-program bundled PFO overlap: staggered margins/shared section/closed/open/attached tissue/seek/ASD/cleanup pass");
