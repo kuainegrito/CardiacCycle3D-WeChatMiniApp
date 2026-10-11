@@ -1626,7 +1626,7 @@ export class Heart2DView {
       atrialSettings: this.atrialSettings,
     });
     const g = (this.geometry = heart2dGeometry(this.state));
-    this.conductionView.update(frame.sample?.conduction, this.state.s);
+    this.conductionView.update(frame.sample?.conduction, this.state.s, g.shell);
     this.shell.setAttribute("d", g.shell);
     for (const [id, d] of Object.entries(g.cavities))
       this.cavity[id].setAttribute("d", d);

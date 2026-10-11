@@ -96,7 +96,7 @@ const routes = [
     end: 85,
     points: [
       p(460, 675, "LV", 8, 25),
-      p(518, 682, "LV", 12, 27),
+      p(518, 670, "LV", 12, 25),
       p(551, 642, "LV", 32, 33),
       p(553, 572, "LV", 45, 37),
       p(529, 493, "LV", 50, 22),
@@ -119,7 +119,7 @@ const routes = [
 for (const side of ["right", "left"]) {
   const wall = routes.find((r) => r.id === `${side}-purkinje`);
   wall.points.slice(1).forEach((root, i) => {
-    const sign = side === "left" ? 1 : -1;
+    const sign = side === "left" ? -1 : 1;
     routes.push({
       id: `${side}-twig-${i}`,
       clock: "ventricular",
@@ -207,10 +207,18 @@ export function conduction2dState(conduction, s = {}) {
 export class Conduction2D {
   constructor(svg, create) {
     const el = (tag, attrs, parent) => create(tag, attrs, parent);
+    const defs = el("defs", {}, svg);
+    const clip = el(
+      "clipPath",
+      { id: "h2d-conduction-clip", clipPathUnits: "userSpaceOnUse" },
+      defs,
+    );
+    this.clip = el("path", {}, clip);
     this.group = el(
       "g",
       {
         "data-conduction": "network",
+        "clip-path": "url(#h2d-conduction-clip)",
         "pointer-events": "none",
         "aria-hidden": "true",
       },
@@ -258,7 +266,8 @@ export class Conduction2D {
       ];
     }
   }
-  update(conduction, s) {
+  update(conduction, s, shell) {
+    if (shell) this.clip.setAttribute("d", shell);
     const state = conduction2dState(conduction, s);
     this.group.setAttribute("display", state ? "inline" : "none");
     if (!state) return;
