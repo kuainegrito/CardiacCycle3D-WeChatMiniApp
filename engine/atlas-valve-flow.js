@@ -144,6 +144,34 @@ export function splitVolumeChange(model, change, valves = {}) {
   return out;
 }
 
+// CC-52: the model samples of the latest beat grid, min(T − 0.001, i·T/n).
+// The blood-flow view takes a beat's net flow and both AV leaks on the same
+// grid (volumeFlowIntegrals, regurgitantIntegral) and the filling view takes
+// it again; one set of samples serves them all. Samples are only read.
+let lastGrid = null;
+function gridSamples(model, hr, modifiers, beatIndex, n) {
+  const g = lastGrid;
+  if (
+    g?.model === model &&
+    g.hr === hr &&
+    g.beatIndex === beatIndex &&
+    g.n === n &&
+    g.preload === modifiers.preload &&
+    g.afterload === modifiers.afterload &&
+    g.contractility === modifiers.contractility
+  )
+    return g.samples;
+  const T = model.cycleDuration(hr, beatIndex),
+    samples = [];
+  for (let i = 0; i <= n; i++)
+    samples.push(
+      model.sample(Math.min(T - 0.001, (i * T) / n), hr, modifiers, beatIndex),
+    );
+  const { preload, afterload, contractility } = modifiers;
+  lastGrid = { model, hr, beatIndex, n, preload, afterload, contractility, samples };
+  return samples;
+}
+
 // Cumulative volume (mL) through each source over one beat, on n uniform
 // steps (trapezoids); `total` is the net volume per beat.
 export function volumeFlowIntegrals(
@@ -157,10 +185,11 @@ export function volumeFlowIntegrals(
   // Exact per step: the volume change between grid samples, split by the
   // valve state at the step's midpoint flows (average of its two ends).
   const T = model.cycleDuration(hr, beatIndex),
+    samples = gridSamples(model, hr, modifiers, beatIndex, n),
     grid = [];
   for (let i = 0; i <= n; i++) {
     const t = Math.min(T - 0.001, (i * T) / n),
-      sample = model.sample(t, hr, modifiers, beatIndex);
+      sample = samples[i];
     grid.push({
       t,
       sample,
@@ -259,15 +288,10 @@ export function regurgitantIntegral(
 ) {
   const T = model.cycleDuration(hr, beatIndex),
     values = new Float64Array(n + 1),
-    times = new Float64Array(n + 1);
+    times = new Float64Array(n + 1),
+    samples = gridSamples(model, hr, modifiers, beatIndex, n);
   const leak = (i) =>
-    Math.min(
-      0,
-      Number(
-        model.sample(Math.min(T - 0.001, (i * T) / n), hr, modifiers, beatIndex)
-          .valves[valve]?.flow ?? 0,
-      ),
-    );
+    Math.min(0, Number(samples[i].valves[valve]?.flow ?? 0));
   let previous = leak(0);
   for (let i = 1; i <= n; i++) {
     const next = leak(i);

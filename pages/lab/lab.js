@@ -38,11 +38,9 @@ const PREPARE_FRAME_MS = 33;
 // would draw it twice as often), and on a slow phone at most three quarters
 // of the time (stepAtlas).
 const ATLAS_MIN_MS = 15;
-// A camera nearer the heart's centre than this share of its diagonal may be
-// inside a chamber, where the chordae and their seating can be seen
-// (syncChords). The named views frame the heart from 1.3–1.6 diagonals; the
-// PFO's close-up of the septum is about half a diagonal away.
-const CHORD_CAMERA = 0.6;
+// The website's 3D heart seats the chordae whenever they are shown; here only
+// with the camera close to the heart, where the taper can be seen (syncChords).
+const CHORD_SEATING = "near";
 const HEART_TEXT = {
   labels: Object.fromEntries(Object.keys(heartLabels.en.labels).map((k) => [k, [heartLabels.en.labels[k], heartLabels.zh.labels[k]]])),
   notes: Object.fromEntries(Object.keys(heartLabels.en.notes).map((k) => [k, [heartLabels.en.notes[k], heartLabels.zh.notes[k]]])),
@@ -769,6 +767,7 @@ Page({
       glb,
       onGraphicsChange: (lost) => lost && this.atlas === view && this.atlasFailed(new Error("WebGL context lost")),
     });
+    view.chordSeating = CHORD_SEATING;
     view.holdFrame++; // nothing is drawn (or compiled) off screen
     try {
       await view.init();
@@ -797,11 +796,10 @@ Page({
       this.markStep("engine", "active");
       // Let the loading card appear before the engine code is parsed (it blocks).
       await new Promise((resolve) => setTimeout(resolve, 50));
-      const { AtlasLabView, resumeAtlasView, setChords } = require("../../vendor/atlas3d.js");
+      const { AtlasLabView, resumeAtlasView } = require("../../vendor/atlas3d.js");
       this.engine = {
         AtlasLabView,
         resumeAtlasView,
-        setChords,
         shim: require("../../vendor/atlas-shim.js"),
         CONTENT_URL: require("../../vendor/atlas-asset.js").CONTENT_URL,
       };
@@ -841,6 +839,7 @@ Page({
           glb: prefetchAtlas(),
           onGraphicsChange: (lost) => lost && this.atlas === view && this.atlasFailed(new Error("WebGL context lost")),
         });
+        view.chordSeating = CHORD_SEATING;
         await view.init();
         // No tap-to-select here: drop the website's picker, keep OrbitControls.
         node.removeEventListener("pointerdown", view.handlePointerDown);
@@ -1020,20 +1019,11 @@ Page({
   // translucent view, or a camera moved into the heart, brings them back,
   // moved before they are drawn. Their seating, a taper of a fraction of a
   // millimetre where each tube meets its leaflet (half of their cost), is
-  // done only with the camera that close (tools/chord-gate.js).
+  // done only with the camera that close (CHORD_SEATING). Since 2026-10-14
+  // the website's 3D heart does all this itself (AtlasLabView.syncChords,
+  // the website's CC-51); the page tells it when the camera or walls changed.
   syncChords() {
-    const atlas = this.atlas, setChords = this.engine?.setChords;
-    if (!atlas?.camera || !setChords) return;
-    const near = atlas.camera.position.length() < CHORD_CAMERA * (atlas.diagonal ?? Infinity);
-    const state = { active: atlas.wallOpacity < 1 || near, seat: near };
-    if (state.active === this.chords?.active && state.seat === this.chords?.seat) return;
-    const more = !this.chords || (state.active && !this.chords.active) || (state.seat && !this.chords.seat);
-    this.chords = state;
-    setChords(state);
-    if (more) {
-      atlas.stateKey = undefined; // a whole step, even at this instant
-      this.update(true, true);
-    }
+    this.atlas?.syncChords?.();
   },
 
   // ---- traces --------------------------------------------------------------

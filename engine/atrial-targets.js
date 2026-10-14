@@ -187,6 +187,17 @@ const meanPressures = (model, hr, modifiers, stepMs) => {
   return { LA: sum.LA / n, RA: sum.RA / n };
 };
 
+// CC-52: the normal heart's mean atrial pressures, once per baseline, rate and
+// step, instead of a fresh normal model for every scenario model.
+const normalMeans = new WeakMap();
+function normalMeanPressures(baseline, hr, stepMs) {
+  let means = normalMeans.get(baseline);
+  if (!means) normalMeans.set(baseline, (means = new Map()));
+  return remember(means, `${hr}|${stepMs}`, () =>
+    meanPressures(createModel(baseline), hr, {}, stepMs),
+  );
+}
+
 const caches = new WeakMap();
 function cacheFor(model, settings) {
   let cache = caches.get(model);
@@ -209,10 +220,9 @@ export function atrialPressureOffsets(model, modifiers = {}, settings) {
         modifiers,
         t.samplingMs,
       ),
-      normal = meanPressures(
-        createModel(model.baseline),
+      normal = normalMeanPressures(
+        model.baseline,
         t.pressureReferenceHr,
-        {},
         t.samplingMs,
       );
     return { LA: scenario.LA - normal.LA, RA: scenario.RA - normal.RA };

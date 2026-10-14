@@ -8,7 +8,6 @@ import { installFastBounds } from "./fast-bounds.js";
 installFastBounds(THREE);
 export { THREE };
 export { AtlasLabView } from "@web/js/atlas-lab-view.js";
-export { setChords } from "./chord-gate.js";
 
 // Switching to the 2D heart removes the WebGL canvas (pages/lab/lab.js). These
 // two keep the built 3D heart meanwhile: parkAtlasView releases only what
@@ -70,7 +69,11 @@ export function resumeAtlasView(view, container) {
   controls.minDistance = saved.minDistance;
   controls.maxDistance = saved.maxDistance;
   controls.target.copy(saved.target);
-  controls.addEventListener("change", () => view.render());
+  // As AtlasLabView.init(): a camera moved into the heart brings the chordae back.
+  controls.addEventListener("change", () => {
+    view.syncChords();
+    view.render();
+  });
   controls.update();
   Object.assign(view, { renderer, controls, parked: null });
   view.resizeObserver = new ResizeObserver(() => view.resize());

@@ -23,8 +23,9 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 function atlasStandIn() {
   return {
     preset: "anatomy", wallOpacity: 1, stateKey: "posed", lastArgs: null, layersReady: Promise.resolve(), holdFrame: 0,
-    frames: [], presets: [], cameras: [],
+    frames: [], presets: [], cameras: [], chordSyncs: 0,
     setVisual() {},
+    syncChords() { this.chordSyncs++; },
     update(frame) { this.frames.push(frame); this.lastArgs = frame; },
     setPreset(name) {
       this.preset = name;
@@ -168,30 +169,18 @@ test("an input handler leaves the 3D step to the next frame, and steps are at mo
   assert.equal(atlas.frames.length, steps + 1);
 });
 
-test("the chordae are moved and drawn only where they can be seen, and seated only close up", () => {
+// Which chordae are computed is the website's 3D heart's decision since
+// 2026-10-14 (AtlasLabView.syncChords; with chordSeating "near" it is checked
+// on the real bundle by tools/check-chord-insertions.mjs). The page asks it
+// again whenever its walls or camera may have changed.
+test("the page has the 3D heart recheck its chordae after wall and camera changes", () => {
   const page = lab(), { atlas } = page;
-  const states = [];
-  page.engine = { setChords: (state) => states.push(`${state.active ? "on" : "off"}${state.seat ? "+seat" : ""}`) };
-  atlas.diagonal = 0.21;
-  atlas.camera = { position: { length: () => 0.29 } }; // a named view frames the heart from outside
   page.syncWall();
-  assert.deepEqual(states, ["off"], "opaque walls, camera outside");
-  atlas.camera.position.length = () => 0.05; // zoomed into a chamber
-  page.atlasTouch({ type: "touchend", touches: [], changedTouches: [] });
-  assert.deepEqual(states, ["off", "on+seat"]);
-  assert.equal(atlas.stateKey, undefined, "moved at the next step, even at the same instant");
-  page.restartLoop();
-  assert.equal(atlas.frames.at(-1).model, page.model);
-  atlas.camera.position.length = () => 0.29;
-  page.atlasTouch({ type: "touchend", touches: [], changedTouches: [] });
-  atlas.setPreset("xray");
-  atlas.stateKey = "posed";
-  page.syncWall();
-  assert.deepEqual(states, ["off", "on+seat", "off", "on"], "translucent walls show them, unseated from afar");
-  assert.equal(atlas.stateKey, undefined);
-  atlas.camera.position.length = () => 0.1; // the PFO's close-up of the septum
+  assert.equal(atlas.chordSyncs, 1, "a preset or wall opacity");
   page.atlasTouch({ type: "touchmove", touches: [{}], changedTouches: [] });
-  assert.deepEqual(states.at(-1), "on+seat");
+  page.atlasTouch({ type: "touchend", touches: [], changedTouches: [] });
+  assert.equal(atlas.chordSyncs, 3, "a turn or zoom of the camera");
+  assert.equal(page.chords, undefined, "the page keeps no chord state of its own");
 });
 
 test("the hold ends after two seconds if the view is still being built", async (t) => {

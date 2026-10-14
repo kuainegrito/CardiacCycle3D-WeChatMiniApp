@@ -15,8 +15,9 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
  const patch=scenario.patch??{},ref=baseline.periodMs,phys=baseline.physiology;
  const lookupWave=(id,t)=>lookup(baseline.waveforms[id],t);
  const cycleDuration=(hr=scenario.hr??75,beatIndex=0)=>60000/clamp(hr,40,180)*(patch.rrSequence?.[modulo(beatIndex,patch.rrSequence.length)]??1);
- function phaseSchedule(hr=scenario.hr??75,beatIndex=0){
-  const T=cycleDuration(hr,beatIndex),s=Math.sqrt(T/ref),atrial=100*T/ref,relax=60*s;
+ function phaseSchedule(hr=scenario.hr??75,beatIndex=0){return scheduleFor(cycleDuration(hr,beatIndex));}
+ function scheduleFor(T){
+  const s=Math.sqrt(T/ref),atrial=100*T/ref,relax=60*s;
   // Very short AF intervals can exceed the nominal HR slider rate. Preserve a
   // positive filling window there rather than returning a schedule longer than RR.
   const systole=Math.min(350*s,T-atrial-relax-Math.min(20,T*.06));
@@ -25,11 +26,27 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   let start=0;
   return baseline.phases.map((phase,i)=>{const p={...phase,index:i,start,end:start+durations[i],duration:durations[i]};start=p.end;return p;});
  }
- function mappedTime(t,hr,beatIndex){const schedule=phaseSchedule(hr,beatIndex),T=cycleDuration(hr,beatIndex),time=modulo(t,T);let index=schedule.findIndex(p=>time>=p.start&&time<p.end);if(index<0)index=0;const p=schedule[index],r=baseline.phases[index];return {referenceTime:r.start+(time-p.start)/(p.duration||1)*(r.end-r.start),phaseIndex:index,phase:p,T,t:time,schedule};}
+ // CC-52: a sample also reads the pressures of the last valve ramp (15 more
+ // model states, sample() pressureAt). Those inner states share one schedule
+ // and conduction timing per cycle length (shared below), and their pressures
+ // are kept between samples (pressureHistory): a trace or table samples
+ // instants about 1-2 ms apart, so successive look-backs mostly overlap. The
+ // same arithmetic on the same inputs, so the same numbers; what a sample
+ // returns is computed afresh as before.
+ const schedules=new Map(),timings=new Map(),histories=new Map();
+ const remember=(map,key,make)=>{let v=map.get(key);if(v===undefined){if(map.size>=64)map.clear();v=make();map.set(key,v);}return v;};
+ function pressureHistory(hr,modifiers,beatIndex){
+  const key=`${hr}|${beatIndex}|${modifiers.preload}|${modifiers.afterload}|${modifiers.contractility}`;
+  let h=histories.get(key);
+  if(!h){if(histories.size>=4)histories.delete(histories.keys().next().value);h=new Map();histories.set(key,h);}
+  else if(h.size>=512)h.clear();
+  return h;
+ }
+ function mappedTime(t,hr,beatIndex,shared=false){const T=cycleDuration(hr,beatIndex),schedule=shared?remember(schedules,T,()=>scheduleFor(T)):phaseSchedule(hr,beatIndex),time=modulo(t,T);let index=schedule.findIndex(p=>time>=p.start&&time<p.end);if(index<0)index=0;const p=schedule[index],r=baseline.phases[index];return {referenceTime:r.start+(time-p.start)/(p.duration||1)*(r.end-r.start),phaseIndex:index,phase:p,T,t:time,schedule};}
  function absoluteBeatStart(hr,beatIndex){const seq=patch.rrSequence;if(!seq)return beatIndex*cycleDuration(hr,0);const rounds=Math.floor(beatIndex/seq.length),tail=modulo(beatIndex,seq.length);return 60000/clamp(hr,40,180)*(rounds*seq.reduce((a,b)=>a+b,0)+seq.slice(0,tail).reduce((a,b)=>a+b,0));}
- function pressureVolume(t,hr,modifiers,beatIndex){
-  const m=mappedTime(t,hr,beatIndex),r=m.referenceTime;
-  const timing=conductionTiming(baseline,patch,m.T,m.schedule[0].end),absolute=absoluteBeatStart(hr,beatIndex)+m.t;
+ function pressureVolume(t,hr,modifiers,beatIndex,shared=false){
+  const m=mappedTime(t,hr,beatIndex,shared),r=m.referenceTime;
+  const timing=shared?remember(timings,m.T,()=>conductionTiming(baseline,patch,m.T,m.schedule[0].end)):conductionTiming(baseline,patch,m.T,m.schedule[0].end),absolute=absoluteBeatStart(hr,beatIndex)+m.t;
   const atrialStart=timing.saStart+80*timing.atrialScale;
   const atrialDuration=Math.max(1,Math.min(100*timing.atrialScale,m.schedule[0].end-atrialStart));
   // Place organized atrial mechanics after its electrical activation, including
@@ -110,7 +127,7 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   let ecg=(sinceRapid<=rapidDuration?lookupWave('qrs',electricalRef):0)+(sinceQrs<=timing.qtMs?lookupWave('twave',qtRef):0);
   ecg+=patch.atrialFibrillation?lookupWave('afFibrillation',state.absolute):pAge<80*timing.atrialScale?lookupWave('p',pRef):0;
   if(patch.accessoryPathway&&sinceQrs<=60*timing.qrsScale)ecg+=lookupWave('delta',35+sinceQrs/timing.qrsScale);
-  const recent=new Map(),pressureAt=at=>{let p=recent.get(at);if(!p){p=pressureVolume(at,hr,modifiers,beatIndex).pressures;recent.set(at,p);}return p;};
+  const recent=pressureHistory(hr,modifiers,beatIndex),pressureAt=at=>{let p=recent.get(at);if(!p){p=pressureVolume(at,hr,modifiers,beatIndex,true).pressures;recent.set(at,p);}return p;};
   const valves=valveStates(state.pressures,pressureAt,time,patch,phys.valveRampMs);
   // CC-48: the foramen-ovale flap shares the valves' pressure history.
   const interatrial=patch.pfo||patch.asd?interatrialState(state.pressures,Array.from({length:15},(_,i)=>pressureAt(time-i*phys.valveRampMs/15)),patch):null;

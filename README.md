@@ -10,7 +10,7 @@
 | `engine/` | 网站的模型、二维心脏 `heart2d.js`、曲线 `charts.js` | `tools/sync-from-web.mjs` 复制，**勿手改** |
 | `engine/mp-dom.js`、`engine/svg-canvas.js` | DOM 替身、SVG→canvas 绘制器 | 手写 |
 | `data/` | 网站 `content/` 的 JSON 转成的 JS 模块 | `tools/sync-from-web.mjs` 生成，**勿手改** |
-| `vendor/atlas3d.js`、`vendor/atlas-asset.js` | 网站三维心脏 + three.js 打包（入口 `tools/atlas-entry.js` 另含小程序用的 `parkAtlasView` / `resumeAtlasView` / `setChords`；打包时以 `tools/chord-insertions.js`、`tools/av-chord-runtime.js` 替换网站同名的腱索模块，并装入 `tools/fast-bounds.js`，见"性能处理"） | `tools/build-vendor.mjs` 生成，**勿手改** |
+| `vendor/atlas3d.js`、`vendor/atlas-asset.js` | 网站三维心脏 + three.js 打包（入口 `tools/atlas-entry.js` 另含小程序用的 `parkAtlasView` / `resumeAtlasView`，并装入 `tools/fast-bounds.js`，见"性能处理"） | `tools/build-vendor.mjs` 生成，**勿手改** |
 | `vendor/atlas-shim.js` | 三维心脏的浏览器替身 | 手写 |
 
 三维心脏模型（约 2.3 MB）不在包里，打开小程序时即开始从 kuaiyu.site 下载（与二维心脏、曲线的初始化并行），并缓存在手机上；新版本模型保存时删除旧版本缓存。
@@ -33,7 +33,7 @@
 
    模型文件名带哈希，网站重新部署后若模型变了，必须重跑这一步，否则小程序会下载旧地址而失败。
 
-   网站的 `js/engine/chord-insertions.js` 若有改动，打包会停下：先把改动对应到 `tools/chord-insertions.js`（小程序版，结果须与网站逐位相同），用 `node tools/check-chord-insertions.mjs` 核对，再更新 `tools/build-vendor.mjs` 里记录的哈希。
+   打包后用 `node tools/check-chord-insertions.mjs` 核对三维包的腱索与网站逐位相同（2026-10-14 起三维包直接使用网站的腱索模块，不再替换）。
 
 ## 编译与预览
 
@@ -92,7 +92,7 @@
 ## 性能处理
 
 - 三维运动计算按实际耗时自动降频（每个 60 Hz 帧最多一次，慢手机上最多占四分之三的时间），播放与曲线保持流畅；拖动旋转时只渲染不变形，松手即恢复。三维运动只在帧循环里计算：滑块、按钮等操作先更新界面，下一帧再算三维心脏。
-- 腱索（2026-10-13 起）：三维每步运动里，83 根腱索的计算原先占八成以上（无 JIT 时约 150 ms）。小程序版 `tools/chord-insertions.js` 只计算挂有腱索的 5 片房室瓣叶、每个姿势只算一次，并先筛出插入点附近的三角形，法线与包围盒（`tools/fast-bounds.js`）也直接在数组上计算，结果与网站逐位相同（`tools/check-chord-insertions.mjs`）。腱索在心室里：心室壁不透明（解剖视图）、镜头又在心脏外时看不见，这时既不计算也不绘制（`tools/chord-gate.js`、`pages/lab/lab.js` `syncChords`）；换成半透明视图、拖动透明度滑块或把镜头推进心脏里时恢复，并在显示前先算到当前时刻。腱索末端贴合瓣叶的收窄（不到 1 毫米，占腱索计算的一半以上）只在镜头离心脏中心不到 0.6 个对角线时计算（2026-10-14 起；卵圆孔未闭的房间隔特写在此范围内），常规视图下腱索末端保持网站收窄前的形状。
+- 腱索（2026-10-13 起）：三维每步运动里，83 根腱索的计算原先占八成以上（无 JIT 时约 150 ms）。快速的腱索贴合（只算挂有腱索的 5 片房室瓣叶、每个姿势只算一次，先筛出插入点附近的三角形，法线与包围盒直接在数组上计算，结果逐位相同）先在小程序里做成，2026-10-14 起已并入网站（网站 CC-51），三维包直接使用网站的模块；`tools/fast-bounds.js` 让 three.js 其余几何体的包围盒 / 包围球也直接在数组上算。腱索在心室里：心室壁不透明（解剖视图）、镜头又在心脏外时看不见，这时既不计算也不绘制；换成半透明视图、拖动透明度滑块或把镜头推进心脏里时恢复，并在显示前先算到当前时刻。腱索末端贴合瓣叶的收窄（不到 1 毫米，占腱索计算的一半以上）只在镜头离心脏中心不到 0.6 个对角线时计算（2026-10-14 起；卵圆孔未闭的房间隔特写在此范围内），常规视图下腱索末端保持收窄前的形状。这两项判断都由网站三维心脏自己完成（`AtlasLabView.syncChords`）；小程序把 `chordSeating` 设为 `"near"`（网站默认 `"always"`，总是收窄），并在拖动镜头、换视图或透明度后请它重新判断（`pages/lab/lab.js` `syncChords`）。核对：`tools/check-chord-insertions.mjs`。
 - 每拍相同的情景（14 个中 11 个，判断时比较第 0 拍与第 1–7 拍，差值小于 1e-9 视为相同）按第 0 拍计算，换拍时不重算。2026-10-14 前用严格相等比较：心率不是 75 次/分时，各拍的绝对时间带有约 1e-15 的舍入误差，相同的心拍被判为不同，每拍都重建曲线和三维表格（运动、心动过缓及任何改过心率的情景都会周期性卡顿）。
 - 房颤、三度房室阻滞与卵圆孔未闭（每第四拍为 Valsalva 释放）的下一拍在本拍播放时分批预算：曲线的 400 个样本，以及新一拍的心房容积表（三维或二维心脏）和三维血流 / 充盈视图的流量积分要采的样本（模型暂存，`shareableSamples` 的 `shareBeat`），按本拍剩余的帧数分摊，每帧最多 8 ms；换拍时只用这些样本建表。
 - 负荷滑块拖动时只更新数值，松手后重算一次；拖动时间轴时三维心脏按节流频率跟随，松手时精确定位。
@@ -233,3 +233,12 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - 验证：单元测试 26 项（新增任何心率下的"每拍相同"判断、下一拍预算、腱索收窄只在近处、时钟回拨后照常运动）；`tools/check-chord-insertions.mjs`（收窄、不收窄、关闭三种状态都与网站逐位一致）、`tools/check-pfo-bundle.mjs`、`tools/check-scenario-switch.mjs` 通过。仍未在微信开发者工具或真机上验证。
 - 2026-10-13 至 10-14 三轮改动按所有者指令一并提交、推送至 `main`；未改网站，未上传或发布微信小程序。
 
+### 2026-10-14（第二轮）：网站并入腱索修正后，三维包改用网站的腱索模块
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)；按所有者指令（网站有了腱索修正后，去掉 `tools/build-vendor.mjs` 里 `./chord-insertions.js` 的替换和哈希检查，再同步、打包、跑测试和检查）由 Claude 实施。
+
+- 网站已移植本仓库 10-13/14 的修正：CC-51（`eabdce2`，已部署 kuaiyu.site）包括逐位相同的快速腱索贴合、`fast-bounds`、相同心搏、下一拍准备、每情景一个模型，以及三维心脏自己的腱索开关（`AtlasLabView.syncChords`、`chordSeating`）；CC-52（网站工作树分支 `claude/youthful-mayer-6143e0`，尚未推送）给网站加了三维步进限速，并让模型采样快约 2–3 倍，结果逐位不变。本仓库经 `sync-from-web` 拿到的是 `engine/waveforms.js`、`engine/atrial-targets.js`、`engine/atlas-valve-flow.js` 三个文件。
+- `tools/build-vendor.mjs` 去掉 `./chord-insertions.js` 的替换及其哈希检查。腱索开关原来的包装（`./av-chord-runtime.js` 别名、`tools/chord-gate.js`）已不需要，一并去掉，因为网站自己会判断：心壁不透明且镜头在心脏外时腱索隐藏、不计算；半透明或镜头进入心脏时恢复。删除 `tools/chord-insertions.js`、`tools/chord-gate.js`、`tools/av-chord-runtime.js`，三维包不再导出 `setChords`。
+- `pages/lab/lab.js`：新建三维心脏时设 `chordSeating = "near"`，只在镜头靠近时做末端收窄，与此前相同。`syncChords` 改为请三维心脏重新判断（换视图、透明度、拖动镜头时）。`tools/atlas-entry.js` `resumeAtlasView`：停放后重新接上画布时，镜头变化同样触发判断（网站自己的监听只在首次构建时挂上）。`tools/fast-bounds.js` 保留（其余几何体的包围盒）。
+- 同步与打包：网站工作树 `npm run build` → `node tools/sync-from-web.mjs <网站工作树>` → `node tools/build-vendor.mjs <网站工作树>`。模型文件不变（`heart-atlas-cc07-_1ZJmXZY.glb`）。同步还带进网站早先的一处文案：三维 / 二维切换按钮 "Realistic heart" → "3D heart"，小程序本来就以自己的文案覆盖。
+- 验证：单元测试 26/26。原"腱索只在看得见时计算"一项改为检查页面在换视图、拖动镜头后请三维心脏重新判断，判断本身改在真实三维包上检查。`tools/check-chord-insertions.mjs` 改写后检查：三维包整步运动的 83 根腱索与网站逐位相同；不透明心壁、镜头在外时隐藏且保持原样；半透明远看是收窄前的管；镜头进入心脏或 `"always"` 时与网站收窄后相同；280 个姿势上 `fast-bounds` 与 three.js 相同。无 JIT 时三维包整步运动（不含教学图层）：腱索隐藏 1.5 ms、不收窄 8.5 ms、收窄 27.8 ms。`tools/check-pfo-bundle.mjs`、`tools/check-scenario-switch.mjs` 通过。未在微信开发者工具或真机上验证，未上传或发布。
