@@ -5,6 +5,7 @@
 // bundled (2.3 MB): the mini program downloads the website's file, whose
 // hashed name is read from the web app's dist/ here.
 // Run from this folder: node tools/build-vendor.mjs [path/to/apps/cardiac_cycle]
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -14,6 +15,16 @@ const web = resolve(process.argv[2] ?? "../../My_webpage/cycling-metabolism_simu
 const require = createRequire(web + "/package.json");
 const { build } = await import(pathToFileURL(require.resolve("vite")).href);
 const three = web + "/node_modules/three";
+
+// tools/chord-insertions.js is bundled in place of the website's
+// js/engine/chord-insertions.js (the same chord seating, a fraction of the
+// work per 3D step). It follows this version of the website's file; when
+// that changes, bring the mini program's file in line, check it with
+// tools/check-chord-insertions.mjs, and record the new hash here.
+const CHORD_INSERTIONS_SHA256 = "a4ebf1a210e2d0bd34db004ac406c9e8f7380d122036fd0954bfd2335d595672";
+const chordSource = (await readFile(web + "/js/engine/chord-insertions.js", "utf8")).replace(/\r\n/g, "\n");
+if (createHash("sha256").update(chordSource).digest("hex") !== CHORD_INSERTIONS_SHA256)
+  throw new Error("The website's js/engine/chord-insertions.js changed: update tools/chord-insertions.js to match (see its header) before bundling.");
 
 const glb = (await readdir(web + "/dist/assets")).find((f) => /^heart-atlas-cc07-.*\.glb$/.test(f));
 if (!glb) throw new Error("Build the web app first: no dist/assets/heart-atlas-cc07-*.glb");
@@ -31,6 +42,9 @@ await build({
       { find: /^three\/addons\/(.*)$/, replacement: three + "/examples/jsm/$1" },
       { find: /^three$/, replacement: three + "/build/three.module.js" },
       { find: /^\.\/atlas-asset\.js$/, replacement: resolve("tools/atlas-asset-stub.js") },
+      { find: /^\.\/chord-insertions\.js$/, replacement: resolve("tools/chord-insertions.js") },
+      // Wraps the website's file: chordae that cannot be seen are not moved (tools/chord-gate.js).
+      { find: /^\.\/av-chord-runtime\.js$/, replacement: resolve("tools/av-chord-runtime.js") },
       { find: /^@web\/(.*)$/, replacement: web + "/$1" },
     ],
   },

@@ -31,6 +31,7 @@ function fixture(heartModel, pinned = true) {
 
 test("PFO atlas reuses motion tables across beats without freezing release or bubble time", () => {
   const { page } = fixture("atlas");
+  page.inFrame = true; // stepped as by the frame loop
   const model = createModel(baseline, scenarios.find(s => s.id === "pfo"));
   const frames = [];
   page.atlas = { setVisual() {}, update(frame) { frames.push(frame); } };

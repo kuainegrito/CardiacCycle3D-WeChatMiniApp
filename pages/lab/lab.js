@@ -23,6 +23,26 @@ const VERSION = "1.0.0"; // the website's package.json version this copy follows
 const SPEEDS = [0.1, 0.25, 0.5, 1, 2];
 const VALVES = ["mitral", "aortic", "tricuspid", "pulmonary"];
 const UI_MS = 100; // setData throttle while playing
+const SETTLE_HOLD_MS = 2000; // longest a scenario switch holds the 3D heart (settleAtlas)
+// 3D views whose teaching layer builds blood-flow tables for each scenario
+// (AtlasLabView's flow streaks, filling jets and inflow).
+const FLOW_VIEWS = new Set(["flow", "filling"]);
+// Beat-to-beat differences below this (mV, mL, mmHg) are rounding (checkBeats);
+// real ones are 0.1 and more.
+const BEAT_TOLERANCE = 1e-9;
+// Preparing the next beat (prepareNextBeat): at most this long a frame,
+// assuming frames this far apart (slower than 60 Hz on a busy phone).
+const PREPARE_MS = 8;
+const PREPARE_FRAME_MS = 33;
+// The 3D heart's motion steps: at most one per 60 Hz frame (a 120 Hz screen
+// would draw it twice as often), and on a slow phone at most three quarters
+// of the time (stepAtlas).
+const ATLAS_MIN_MS = 15;
+// A camera nearer the heart's centre than this share of its diagonal may be
+// inside a chamber, where the chordae and their seating can be seen
+// (syncChords). The named views frame the heart from 1.3–1.6 diagonals; the
+// PFO's close-up of the septum is about half a diagonal away.
+const CHORD_CAMERA = 0.6;
 const HEART_TEXT = {
   labels: Object.fromEntries(Object.keys(heartLabels.en.labels).map((k) => [k, [heartLabels.en.labels[k], heartLabels.zh.labels[k]]])),
   notes: Object.fromEntries(Object.keys(heartLabels.en.notes).map((k) => [k, [heartLabels.en.notes[k], heartLabels.zh.notes[k]]])),
@@ -213,12 +233,13 @@ Page({
     this.atlasSteps = freshSteps();
     // A heart kept for the 3D view (parked) is let go when the phone runs low.
     this.onMemory = () => {
+      seriesCache.clear();
       if (this.data.heartModel !== "atlas") this.releaseParked();
     };
     wx.onMemoryWarning?.(this.onMemory);
     this.modifiers = { preload: 1, afterload: 1, contractility: 1 };
     this.chartsSeen = { strips: true, pv: true, ap: true };
-    this.model = createModel(baseline, scenarios[0]);
+    this.model = scenarioModel(scenarios[0]);
     this.clock = new MasterClock(this.model, { hr: scenarios[0].hr ?? 75, speed: SPEEDS[2], playing: true });
     this.refreshContent();
   },
@@ -278,18 +299,29 @@ Page({
   // scenarios; atrial fibrillation and complete heart block differ beat to beat,
   // and the PFO scenario replays a Valsalva release every fourth beat, so beat 0
   // is compared with each of the next seven).
+  // Values are compared to within BEAT_TOLERANCE: away from 75 bpm a beat's
+  // absolute time (beat × RR + t) carries rounding, so identical beats used to
+  // differ by ~1e-15 and every beat was rebuilt, traces and 3D tables alike
+  // (the stutter at any other rate, e.g. exercise or bradycardia).
+  // The answer is kept per scenario, rate and loading (beatChecks).
   checkBeats() {
     const { model, clock } = this, hr = clock.hr, mods = this.modifiers, T = model.cycleDuration(hr, 0);
+    const key = [model.scenario.id, hr, mods.preload, mods.afterload, mods.contractility].join("|");
+    const differ = (x, y) => !(Math.abs(x - y) <= BEAT_TOLERANCE);
+    this.nextBeat = null;
+    model.shareBeat?.(null);
+    if (beatChecks.has(key)) return void (this.sameBeats = beatChecks.get(key));
     this.sameBeats = true;
     for (let beat = 1; beat < 8 && this.sameBeats; beat++) {
       if (model.cycleDuration(hr, beat) !== T) this.sameBeats = false;
       for (let k = 0; k < 16 && this.sameBeats; k++) {
         const t = (T * k) / 16, a = model.sample(t, hr, mods, 0), b = model.sample(t, hr, mods, beat);
-        if (a.ecg !== b.ecg || a.volume.lv !== b.volume.lv || ["la", "lv", "ra", "rv"].some((p) => a.pressures[p] !== b.pressures[p]) || a.interatrial?.open !== b.interatrial?.open)
+        if (differ(a.ecg, b.ecg) || differ(a.volume.lv, b.volume.lv) || ["la", "lv", "ra", "rv"].some((p) => differ(a.pressures[p], b.pressures[p])) || a.interatrial?.open !== b.interatrial?.open)
           this.sameBeats = false;
       }
     }
-    this.nextBeat = null;
+    if (beatChecks.size > 200) beatChecks.clear();
+    beatChecks.set(key, this.sameBeats);
   },
   // At a new beat the website recomputes the whole cycle (400 samples, ~50 ms
   // on a phone): the stall at the end of each cycle. Identical beats keep the
@@ -302,24 +334,54 @@ Page({
       return;
     }
     const next = this.nextBeat;
-    this.rebuild(next && next.beat === beat && next.done ? next.out : null);
+    this.rebuild(next && next.beat === beat && next.out.length === 400 ? next.out : null);
+    this.model.shareBeat?.(null); // the new beat's tables are built
   },
-  prepareNextBeat(budgetMs = 3) {
+  // During each beat the next one is prepared: its traces (400 samples) and
+  // the samples the hearts' tables for it will ask for (beatGrid), which the
+  // model keeps until that beat starts (shareableSamples shareBeat), so the
+  // beat change only builds tables from them. Otherwise a new beat of atrial
+  // fibrillation or complete block waited for 250–750 fresh samples. The work
+  // is spread over the frames left in the current beat, at most PREPARE_MS a
+  // frame.
+  prepareNextBeat() {
     if (this.sameBeats || !this.clock.playing) return;
     const { model, clock } = this, beat = clock.beatIndex + 1;
-    if (!this.nextBeat || this.nextBeat.beat !== beat || this.nextBeat.hr !== clock.hr) {
-      this.nextBeat = { beat, hr: clock.hr, T: model.cycleDuration(clock.hr, beat), out: [], done: false };
+    let next = this.nextBeat;
+    if (!next || next.beat !== beat || next.hr !== clock.hr) {
+      const T = model.cycleDuration(clock.hr, beat);
+      next = this.nextBeat = { beat, hr: clock.hr, T, out: [], grid: this.beatGrid(T), done: false };
+      model.shareBeat?.(beat);
     }
-    const next = this.nextBeat, end = Date.now() + budgetMs;
-    while (!next.done && Date.now() < end) {
-      const i = next.out.length;
-      next.out.push(model.sample((next.T * i) / 400, clock.hr, this.modifiers, beat));
-      next.done = next.out.length === 400;
+    const left = (model.cycleDuration(clock.hr, clock.beatIndex) - clock.t) / Math.max(clock.speed, 1e-3);
+    let count = Math.ceil((400 - next.out.length + next.grid.length) / Math.max(1, Math.floor(left / PREPARE_FRAME_MS) - 1));
+    const end = Date.now() + PREPARE_MS;
+    while (!next.done && count-- > 0 && Date.now() < end) {
+      if (next.out.length < 400) next.out.push(model.sample((next.T * next.out.length) / 400, clock.hr, this.modifiers, beat));
+      else model.sample(next.grid.pop(), clock.hr, this.modifiers, beat);
+      next.done = next.out.length === 400 && !next.grid.length;
     }
+  },
+  // The instants a new beat's tables sample: the atrial volume table (the
+  // website's atrial-targets.js beatTable: 0 and i·T/N, N = T/samplingMs
+  // rounded up) of the heart shown, and for the 3D blood-flow and filling
+  // views their flow integrals (atlas-valve-flow.js volumeFlowIntegrals:
+  // min(T − 0.001, i·T/n), n = 360 and the inflow's 60; the 2D heart's
+  // filling uses the 60). The 3D heart steps PFO beats as beat 0 (stepAtlas).
+  beatGrid(T) {
+    const atlas = this.data.heartModel === "atlas" ? this.atlas : null;
+    if (this.data.heartModel === "atlas" && (!atlas || pfoRepeats(this.model))) return [];
+    const samplingMs = (atlas ? atlas.motion?.atrialSettings : this.heart2d?.atrialSettings)?.targets?.samplingMs;
+    if (!(samplingMs > 0)) return [];
+    const N = Math.ceil(T / samplingMs), dt = T / N, grid = [0];
+    for (let i = 0; i <= N; i++) grid.push(i * dt);
+    for (const n of atlas ? ({ flow: [360], filling: [360, 60] }[atlas.preset] ?? []) : [60])
+      for (let i = 0; i <= n; i++) grid.push(Math.min(T - 0.001, (i * T) / n));
+    return grid;
   },
   rebuild(prepared = null) {
     const { model, clock } = this;
-    this.series = prepared ?? model.series(clock.hr, this.modifiers, clock.beatIndex, 400);
+    this.series = prepared ?? this.cycleSeries();
     this.audio?.setCycle(this.series);
     const schedule = model.phaseSchedule(clock.hr, clock.beatIndex);
     this.charts?.setData(this.series, schedule, baseline, this.data.sideIndex ? "right" : "left");
@@ -340,6 +402,23 @@ Page({
     this.previousBeat = clock.beatIndex;
     if (!prepared) this.checkBeats();
     this.update(true);
+  },
+  // The traces' 400 samples of this beat (model.series, but through
+  // model.sample so a scenario switch shares them; see shareableSamples).
+  // The last few are kept: returning to a scenario, or a language, side or
+  // display toggle, redraws without resampling (a series is about 1 MB).
+  cycleSeries() {
+    const { model, clock } = this, hr = clock.hr, beat = clock.beatIndex, mods = this.modifiers;
+    const key = [model.scenario.id, hr, beat, mods.preload, mods.afterload, mods.contractility].join("|");
+    let series = seriesCache.get(key);
+    seriesCache.delete(key);
+    if (!series) {
+      const T = model.cycleDuration(hr, beat);
+      series = Array.from({ length: 400 }, (_, i) => model.sample((T * i) / 400, hr, mods, beat));
+    }
+    seriesCache.set(key, series);
+    if (seriesCache.size > 3) seriesCache.delete(seriesCache.keys().next().value);
+    return series;
   },
   // force: refresh the readouts now. atlasForce: also step the 3D heart now
   // instead of at its throttled rate (stepAtlas).
@@ -428,18 +507,26 @@ Page({
   stepAtlas(frame, force) {
     const atlas = this.atlas, now = Date.now();
     atlas.setVisual({ colorSafe: this.data.colorSafe, repolarization: this.data.repolarization, erp: this.data.erpOn });
+    if (this.atlasScene) return; // a scenario switch is settling (settleAtlas)
+    // Steps run in the frame loop. An input handler only asks for one, so
+    // that its own changes (slider, button, traces) show first.
+    if (!this.inFrame) return void (this.atlasWant = force || this.atlasWant === "now" ? "now" : "step");
+    force ||= this.atlasWant === "now";
     if (this.atlasDragging && !force) return;
-    if (!force && now - (this.atlasStepAt ?? 0) < (this.atlasCost ?? 0) / 0.75) return;
+    // (A clock set back makes the time since the last step negative: step.)
+    const since = now - (this.atlasStepAt ?? 0);
+    if (!force && since >= 0 && since < Math.max(ATLAS_MIN_MS, (this.atlasCost ?? 0) / 0.75)) return;
+    this.atlasWant = undefined;
     // PFO's Valsalva release shifts RA/RV/PA pressures together, leaving
     // valve gradients and chamber volume curves unchanged. Reuse beat-zero
     // motion/flow tables instead of rebuilding hundreds of samples at every
     // beat boundary. Keep the real sample (including interatrial state and
     // absolute time) so the flap, shunt and bubbles remain intermittent.
-    const patch = frame.model?.patch;
-    const repeatingPfo = patch?.pfo && !patch.asd && !patch.rrSequence && !patch.atrialFibrillation && !patch.completeBlock;
+    const repeatingPfo = pfoRepeats(frame.model);
     if (repeatingPfo && this.atlasPfoBeat !== frame.beatIndex) atlas.stateKey = undefined;
     this.atlasPfoBeat = repeatingPfo ? frame.beatIndex : undefined;
     atlas.update(repeatingPfo ? { ...frame, beatIndex: 0 } : frame);
+    if (this.shareUntilStep) this.stopSharing(); // the last step of a scenario switch
     const cost = Date.now() - now;
     this.atlasCost = this.atlasCost === undefined ? cost : this.atlasCost * 0.8 + cost * 0.2;
     this.atlasStepAt = now;
@@ -471,10 +558,17 @@ Page({
   loop(token) {
     if (token !== this.loopToken || !this.visible) return;
     this.lastFrame = Date.now();
-    this.clock.update(this.lastFrame);
-    if (this.previousBeat !== this.clock.beatIndex) this.newBeat();
-    if (this.clock.playing || Math.abs(this.clock.t - (this.sample?.t ?? -1)) > 1e-5) this.update();
-    this.prepareNextBeat();
+    this.inFrame = true; // 3D steps happen here (stepAtlas)
+    try {
+      this.clock.update(this.lastFrame);
+      if (this.previousBeat !== this.clock.beatIndex) this.newBeat();
+      if (this.atlasScene && !this.atlasScene.settling) this.settleAtlas();
+      else if (this.clock.playing || this.atlasWant || Math.abs(this.clock.t - (this.sample?.t ?? -1)) > 1e-5)
+        this.update(false, this.atlasWant === "now");
+      this.prepareNextBeat();
+    } finally {
+      this.inFrame = false;
+    }
     // WebGL frames are presented on their own canvas's frame callback.
     const target = (this.data.heartModel === "atlas" && this.canvases.atlas) || this.activeHeart() || this.canvases.strips;
     if (target?.node?.requestAnimationFrame) target.node.requestAnimationFrame(() => this.loop(token));
@@ -609,12 +703,16 @@ Page({
   // canvas) so coming back is quick; otherwise it is released. keep = false
   // releases in any case (failures, page closed).
   closeAtlas(keep = false) {
-    const atlas = this.atlas;
-    this.atlas = null;
+    const atlas = this.atlas, scene = this.atlasScene;
+    this.atlas = this.atlasScene = null;
     if (atlas) {
-      if (keep && atlas.holdFrame === 0 && this.parkAtlas(atlas)) this.parkedAtlas = atlas;
-      else releaseAtlas(atlas);
+      if (keep && atlas.holdFrame === 0 && this.parkAtlas(atlas)) {
+        this.parkedAtlas = atlas;
+        // A scenario view not yet applied (settleAtlas) is applied on return.
+        if (scene && !scene.settling) atlas.presetPending = true;
+      } else releaseAtlas(atlas);
     }
+    this.stopSharing();
     this.endLoadCard();
     if (!this.unloaded) this.setData({ atlasReady: false, atlasStatus: "" });
   },
@@ -699,10 +797,11 @@ Page({
       this.markStep("engine", "active");
       // Let the loading card appear before the engine code is parsed (it blocks).
       await new Promise((resolve) => setTimeout(resolve, 50));
-      const { AtlasLabView, resumeAtlasView } = require("../../vendor/atlas3d.js");
+      const { AtlasLabView, resumeAtlasView, setChords } = require("../../vendor/atlas3d.js");
       this.engine = {
         AtlasLabView,
         resumeAtlasView,
+        setChords,
         shim: require("../../vendor/atlas-shim.js"),
         CONTENT_URL: require("../../vendor/atlas-asset.js").CONTENT_URL,
       };
@@ -887,6 +986,7 @@ Page({
     this.atlasDragging = (e.touches?.length ?? 0) > 0;
     if (!this.atlasDragging) this.atlasStepAt = 0; // resume beating at once
     for (const touch of e.changedTouches ?? []) this.atlasShim?.pointer(type, touch);
+    this.syncChords(); // the camera may have moved into the heart
   },
   setPreset(e) {
     const preset = e.currentTarget.dataset.id;
@@ -912,6 +1012,28 @@ Page({
       wallOpacityText: atlas.wallOpacity.toFixed(2),
       wallNote: !!contexts && [...contexts.values()].some((m) => m.visible),
     });
+    this.syncChords();
+  },
+  // The chordae lie inside the ventricles. Behind opaque walls, with the
+  // camera outside the heart, they cannot be seen, so the 3D heart neither
+  // moves nor draws them (moving them was most of a motion step). A
+  // translucent view, or a camera moved into the heart, brings them back,
+  // moved before they are drawn. Their seating, a taper of a fraction of a
+  // millimetre where each tube meets its leaflet (half of their cost), is
+  // done only with the camera that close (tools/chord-gate.js).
+  syncChords() {
+    const atlas = this.atlas, setChords = this.engine?.setChords;
+    if (!atlas?.camera || !setChords) return;
+    const near = atlas.camera.position.length() < CHORD_CAMERA * (atlas.diagonal ?? Infinity);
+    const state = { active: atlas.wallOpacity < 1 || near, seat: near };
+    if (state.active === this.chords?.active && state.seat === this.chords?.seat) return;
+    const more = !this.chords || (state.active && !this.chords.active) || (state.seat && !this.chords.seat);
+    this.chords = state;
+    setChords(state);
+    if (more) {
+      atlas.stateKey = undefined; // a whole step, even at this instant
+      this.update(true, true);
+    }
   },
 
   // ---- traces --------------------------------------------------------------
@@ -1032,15 +1154,28 @@ Page({
     this.clock.setHR(Number(e.detail.value));
     this.rebuild();
   },
+  // The traces, values and a 2D heart switch at once; a shown 3D heart on
+  // the next frame (settleAtlas), so the two costs fall in separate frames.
+  // Each scenario keeps its model (scenarioModel), and the samples a switch
+  // needs more than once are computed once (shareableSamples).
   onScenario(e) {
     const index = Number(e.detail.value), scenario = scenarios[index];
-    this.model = createModel(baseline, scenario);
+    this.stopSharing();
+    this.model?.shareBeat?.(null);
+    this.model = scenarioModel(scenario);
+    this.model.shareSamples(true);
     this.clock.reset(this.model);
     this.clock.setHR(scenario.hr);
     this.setData({ scenarioIndex: index });
-    this.rebuild();
     this.applyScenarioView(scenario.id);
+    this.rebuild();
     this.syncShuntKey();
+    if (!this.atlasScene) this.stopSharing();
+  },
+  // Ends a switch's shared samples (shareableSamples).
+  stopSharing() {
+    this.shareUntilStep = false;
+    this.model?.shareSamples?.(false);
   },
   // The 3D view that shows the scenario best (the website's js/scenario-views.js):
   // conduction for rhythm and conduction disorders, blood flow for stenosis,
@@ -1053,14 +1188,53 @@ Page({
     if (!view) return;
     this.setData({ preset: view.preset });
     this.wantedCamera = view.camera ?? null;
-    if (this.atlas) {
-      this.atlas.setPreset(view.preset);
-      if (this.atlas.wallOpacity !== view.wallOpacity) this.atlas.setWallOpacity(view.wallOpacity);
-      if (this.wantedCamera) this.atlas.setView(this.wantedCamera);
-      this.wantedCamera = null;
-      this.syncWall();
+    if (this.atlas) this.atlasScene = { view };
+    else if (this.parkedAtlas) this.parkedAtlas.presetPending = true;
+  },
+  // A shown 3D heart's part of a scenario switch, a frame after onScenario:
+  // one motion step poses the new scenario (its tables built from the
+  // samples the traces just took) and the scenario's view is set. The heart
+  // then holds still until that view's shaders are compiled and its teaching
+  // layer is shown (AtlasLabView layersReady), instead of stepping frames
+  // that are not drawn. A layer shown places itself from the last step, so
+  // the view's own re-step of the same instant is skipped (lastArgs); a
+  // layer built just now is placed by the next step. On a phone without JIT
+  // a motion step takes about as long as the switch's model samples, and a
+  // switch used to take two or three steps.
+  settleAtlas() {
+    const atlas = this.atlas, scene = this.atlasScene, { view } = scene;
+    const change = atlas.preset !== view.preset;
+    // Leaving a blood-flow or filling view for one without such a layer, the
+    // view is set first and the step waits: a layer still shown would build
+    // its flow tables for the new scenario only to be hidden.
+    const viewFirst = change && FLOW_VIEWS.has(atlas.preset) && !FLOW_VIEWS.has(view.preset);
+    scene.settling = true;
+    if (viewFirst) this.update(true); // the traces go on; the heart holds (stepAtlas)
+    else {
+      this.atlasScene = null;
       this.update(true, true);
-    } else if (this.parkedAtlas) this.parkedAtlas.presetPending = true;
+      this.atlasScene = scene;
+    }
+    if (change) {
+      atlas.setPreset(view.preset);
+      atlas.lastArgs = null;
+    }
+    if (atlas.wallOpacity !== view.wallOpacity) atlas.setWallOpacity(view.wallOpacity);
+    if (this.wantedCamera) atlas.setView(this.wantedCamera);
+    this.wantedCamera = null;
+    this.syncWall();
+    // A layer built for the first time on a slow phone goes on building while the heart beats.
+    const ready = Promise.resolve(atlas.layersReady).catch(() => {});
+    Promise.race([ready, new Promise((resolve) => setTimeout(resolve, SETTLE_HOLD_MS))]).then(() => {
+      if (this.atlasScene !== scene) return;
+      this.atlasScene = null;
+      this.shareUntilStep = true; // stepAtlas
+      if (this.clock.playing) this.atlasStepAt = 0; // beat on at once
+      else {
+        atlas.stateKey = undefined; // paused: place the view at this instant
+        this.update(true, true);
+      }
+    });
   },
   // What the dots of the PFO / ASD mean (the website's key), under the heart.
   syncShuntKey() {
@@ -1074,6 +1248,53 @@ Page({
     });
   },
 });
+
+// One model per scenario for the whole visit. The 3D and 2D hearts keep
+// their tables (atrial volumes and their mean pressures, blood flow) per
+// model object, so returning to a scenario reuses them. A new model at every
+// switch meant 2,000–3,000 fresh model samples: about a second on a phone
+// without JIT.
+const models = new Map();
+function scenarioModel(scenario) {
+  if (!models.has(scenario)) models.set(scenario, shareableSamples(createModel(baseline, scenario)));
+  return models.get(scenario);
+}
+// While a scenario switch settles (onScenario → settleAtlas), equal samples
+// are computed once: at 75 bpm the traces (T·i/400), the atrial volume table
+// (2 ms steps) and its mean pressures sample the same instants, and the 3D
+// blood flow samples its 360-step beat three times (net flow and both AV
+// leaks). Off otherwise: a sample is about 3 kB, and samples are only read.
+// shareBeat(beat) keeps the samples of one beat in the same way while it is
+// prepared (prepareNextBeat), until it starts.
+const SHARED_SAMPLES = 2000;
+function shareableSamples(model) {
+  const sample = model.sample;
+  let shared = null,
+    sharedBeat = null,
+    beatSamples = null;
+  model.sample = (t, hr = model.scenario.hr ?? 75, modifiers = {}, beatIndex = 0) => {
+    const kept = beatIndex === sharedBeat ? beatSamples : shared;
+    if (!kept) return sample(t, hr, modifiers, beatIndex);
+    const key = `${t}|${hr}|${beatIndex}|${modifiers.preload}|${modifiers.afterload}|${modifiers.contractility}`;
+    let s = kept.get(key);
+    if (!s) {
+      s = sample(t, hr, modifiers, beatIndex);
+      if (kept.size < SHARED_SAMPLES) kept.set(key, s);
+    }
+    return s;
+  };
+  model.shareSamples = (on) => void (shared = on ? (shared ?? new Map()) : null);
+  model.shareBeat = (beat) => void ((sharedBeat = beat ?? null), (beatSamples = sharedBeat === null ? null : new Map()));
+  return model;
+}
+// The PFO scenario's beats differ only by the Valsalva release, which leaves
+// the 3D heart's motion tables as they are in beat 0 (stepAtlas).
+const pfoRepeats = (model) => {
+  const p = model?.patch;
+  return !!p?.pfo && !p.asd && !p.rrSequence && !p.atrialFibrillation && !p.completeBlock;
+};
+// The last few traces (cycleSeries) and every "same beats" answer (checkBeats).
+const seriesCache = new Map(), beatChecks = new Map();
 
 // JSON from the website's content/ folder (the same files the website reads).
 function requestJSON(url) {

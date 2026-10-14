@@ -3,9 +3,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { watchGraphicsContext } from "@web/js/engine/graphics-lifecycle.js";
+import { installFastBounds } from "./fast-bounds.js";
 
+installFastBounds(THREE);
 export { THREE };
 export { AtlasLabView } from "@web/js/atlas-lab-view.js";
+export { setChords } from "./chord-gate.js";
 
 // Switching to the 2D heart removes the WebGL canvas (pages/lab/lab.js). These
 // two keep the built 3D heart meanwhile: parkAtlasView releases only what

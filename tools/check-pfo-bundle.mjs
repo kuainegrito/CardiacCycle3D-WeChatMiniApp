@@ -67,7 +67,7 @@ view.pfo = undefined;
 view.describe = () => {};
 view.render = () => {};
 view.setVisual = () => {};
-const host = { ...page, data: {}, atlas: view };
+const host = { ...page, data: {}, atlas: view, inFrame: true }; // stepped as by the frame loop
 const costs = [];
 for (let beat = 0; beat < 8; beat++) {
   const sample = model.sample(400, 75, {}, beat);
