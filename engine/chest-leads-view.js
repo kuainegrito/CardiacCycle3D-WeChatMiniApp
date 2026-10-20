@@ -73,7 +73,7 @@ function label(ctx, s, x, y, color, size = 9, align = "left", weight = "") {
 export class ChestLeadsView {
   constructor({ strips, diagram, readout, findings, i18n }) {
     Object.assign(this, { strips, diagram, readout, findings, i18n });
-    this.mode = "sync";
+    this.mode = "paper"; // ECG paper by default (owner, 2026-10-20)
     this.highlight = new Set();
     this.beats = new Map(); // beatIndex → { T, rows }, for the paper window
     this.background = document.createElement("canvas");

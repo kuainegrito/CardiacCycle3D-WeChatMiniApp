@@ -99,6 +99,8 @@ test("the chest-lead tab binds its own canvases, shows the findings and the inte
 test("a tap on a chest strip row lights that lead and seeks the clock in the synced mode", async () => {
   const { page } = await open("lbbb");
   await tab(page, "chest");
+  assert.equal(page.chest.mode, "paper", "ECG paper by default");
+  page.setChestMode({ currentTarget: { dataset: { mode: "sync" } } });
   page.clock.playing = true;
   // Row 1 of 7 (V1) on a 420 px canvas: top band 16 px, rows of ~55 px.
   page.chestStart({ touches: [{ x: 200, y: 16 + 55 * 1.5 }] });

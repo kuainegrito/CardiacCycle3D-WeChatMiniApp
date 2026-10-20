@@ -215,7 +215,7 @@ Page({
     dialog: null, // "values" | "help"
     // CC-55: the Wiggers card shows the Wiggers strips or the chest leads V1–V6.
     ecgTab: "wiggers",
-    chestMode: "sync",
+    chestMode: "paper", // ECG paper by default (owner, 2026-10-20)
     chestKey: false, // this scenario's key ECG finding is in the chest leads
     chestRows: [],
     chestFindings: [],
