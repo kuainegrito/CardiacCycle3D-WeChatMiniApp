@@ -20,6 +20,7 @@
         <view class="load-slow">{{loadCard.slow}}</view>
         <view class="load-tip"><text class="load-tip-label">{{loadCard.tipLabel}}</text><text>{{loadCard.tip}}</text></view>
       </view>
+      <view class="rotate-hint" wx:if="{{atlas && heartModel === 'atlas' && rotateHint}}"><view class="rotate-hint-hand">👆</view><view class="rotate-hint-text">{{rotateHint}}</view></view>
       <view class="view-presets" wx:if="{{atlas && heartModel === 'atlas' && atlasReady}}">
         <view wx:for="{{presets}}" wx:key="id" class="preset {{item.id === preset ? 'selected' : ''}}" data-id="{{item.id}}" bindtap="setPreset">{{item.label}}</view>
       </view>
@@ -43,7 +44,7 @@
 <!-- Mirrors the phone layout of kuaiyu.site/cardiac_cycle (index.html), without outside links, brand header,
      intro lines, quiz or clinical-connection panel; the author line sits in the "?" dialog (owner's choices). -->
 <view class="page">
-  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, loadCard, atlasStandby, shuntKey, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
+  <view class="dock" wx:if="{{docked}}"><template is="stage" data="{{t, pinned, currentPhase, heartModel, atlasStatus, atlasReady, loadCard, atlasStandby, shuntKey, rotateHint, presets, preset, wallOpacity, wallOpacityText, wallNote, atlas: true, canvasId: 'heartDock'}}"/></view>
   <scroll-view scroll-y class="main" enhanced show-scrollbar="{{false}}">
   <view class="top-row">
     <view class="mobile-panels">

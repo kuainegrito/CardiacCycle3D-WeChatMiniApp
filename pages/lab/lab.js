@@ -140,6 +140,10 @@ const LOAD_TIPS = {
   ],
 };
 // The warm-up (warmAtlas) counts as part of building the 3D heart (owner, 2026-10-20).
+// The one-time "turn the heart" hint (owner, 2026-10-20): 30 s after the 3D
+// heart has loaded without a touch on it, shown for 3 s, once per visit.
+const ROTATE_HINT_DELAY_MS = 30000;
+const ROTATE_HINT_SHOW_MS = 3000;
 const LOAD_STEPS = ["glb", "engine", "build"];
 const i18n = {
   language: "zh",
@@ -215,7 +219,8 @@ Page({
     dialog: null, // "values" | "help"
     // CC-55: the Wiggers card shows the Wiggers strips or the chest leads V1–V6.
     ecgTab: "wiggers",
-    chestMode: "paper", // ECG paper by default (owner, 2026-10-20)
+    chestMode: "paper",
+    rotateHint: "", // caption while the rotate hint shows // ECG paper by default (owner, 2026-10-20)
     chestKey: false, // this scenario's key ECG finding is in the chest leads
     chestRows: [],
     chestFindings: [],
@@ -974,6 +979,7 @@ Page({
       this.wantedCamera = null;
       this.endLoadCard();
       this.setData({ atlasReady: true, atlasStatus: "" });
+      this.scheduleRotateHint();
       this.syncWall();
       this.update(true);
       this.restartLoop();
@@ -1085,7 +1091,22 @@ Page({
     });
   },
   // Touches on the WebGL canvas turn and zoom the heart (OrbitControls).
+  scheduleRotateHint() {
+    if (this.rotateHintDone || this.rotateHintTimer) return;
+    this.rotateHintTimer = setTimeout(() => {
+      if (this.rotateHintDone || this.unloaded) return;
+      this.rotateHintDone = true;
+      if (this.data.heartModel !== "atlas" || !this.atlas) return;
+      this.setData({ rotateHint: i18n.language === "zh" ? "手指拖动可旋转心脏，从各个方向观察" : "Drag with a finger to turn the heart and look at it from every side" });
+      setTimeout(() => !this.unloaded && this.setData({ rotateHint: "" }), ROTATE_HINT_SHOW_MS);
+    }, ROTATE_HINT_DELAY_MS);
+  },
   atlasTouch(e) {
+    // Any touch on the 3D heart before the hint cancels it for good.
+    if (!this.rotateHintDone) {
+      this.rotateHintDone = true;
+      clearTimeout(this.rotateHintTimer);
+    }
     const type = { touchstart: "pointerdown", touchmove: "pointermove", touchend: "pointerup", touchcancel: "pointercancel" }[e.type];
     this.atlasDragging = (e.touches?.length ?? 0) > 0;
     if (!this.atlasDragging) this.atlasStepAt = 0; // resume beating at once
