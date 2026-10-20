@@ -1,4 +1,4 @@
-// Copied by tools/sync-from-web.mjs from js/engine/charts.js; only this line is added.
+// Copied by tools/sync-from-web.mjs from js/engine/charts.js; only this line is added (and any stylesheet import removed).
 import { document, devicePixelRatio } from "./mp-dom.js";
 // Traces are drawn on the dark panels of the portal-matched theme.
 const C = {

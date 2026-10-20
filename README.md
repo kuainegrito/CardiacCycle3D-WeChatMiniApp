@@ -74,6 +74,7 @@
 
 ## 更新记录
 
+- 2026-10-20（同步网站 CC-53/54，小程序 CC-55）：Wiggers 卡片新增「胸导联 V1–V6」标签。Ⅱ导联（参考）与 V1–V6 两种显示：「随心动周期」与 Wiggers 曲线共用时间轴、时相色带和光标，点按、拖动可定位，点按某一导联可高亮；「心电图纸 25 mm/s」滚动显示最近 2.4 秒（由已播放的心搏拼成，可看到房颤 RR 不齐、三度阻滞的 P 波穿行）。上方是从足侧看的胸部水平面图（电极按电压正负变色、实时心电向量与 QRS/T 环）和心率、PR、QRS、QT；下方是「本情景看哪里」，点一下高亮相关导联；要点在胸导联的情景在标签上有金色小点。「读取当前数值」加入 V1–V6。模型与图形直接用网站的 `js/ecg12.js`、`js/ecg12-modifiers.js`、`js/chest-leads-view.js`（`tools/sync-from-web.mjs` 复制，去掉其样式表引用并接入 `mp-dom.js`），各情景的胸导联文件与文字生成为 `data/ecg12.js`；读数与说明在 WXML 中显示。两块画布按 `wx:if` 只在本标签下创建，此时 Wiggers 曲线画在离屏画布上。由 Claude 按负责人指示实施；未上传微信。
 - 2026-10-11（第三轮，同步网站 CC-50）：血液充盈动画。二维心脏照参考 GIF 用颜色加深表现充盈：从上下腔静脉口和肺静脉口以圆形扩大、融合，充满心房，再从房室瓣口（两片瓣叶尖端之间）以圆形进入心室，瓣叶背后与心室壁之间的区域在心室充到约八成之前没有颜色、之后才从瓣尖向瓣环收拢充满（所有边界都是弧线）；三维「充盈」视图新增从静脉经心房、房室瓣到心尖的血流粒子（右心蓝、左心橙）。`engine/svg-canvas.js` 新增 `clip-path` 支持；`tools/sync-from-web.mjs` 增加 `atlas-valve-flow.js`、`inflow.js`；三维重新打包。由 Claude 按负责人指示实施。
 - 2026-10-11（第二轮，同步网站 CC-49）：新增情景「房间隔缺损」（每拍左向右分流、两心房压力接近、第二心音宽而固定分裂；二维缺口与放大图，三维红色含氧血经缺口进入右房）；修正卵圆孔未闭三维瓣片的开放方向（原先错误地摆向右房，现在摆向左房）；造影微泡改为散开的一团，并在心脏下方加一行图例说明白点/红点的含义；切换情景时三维心脏还会转到合适的视角（传导与正常 → 前面观，主动脉瓣狭窄/二尖瓣反流 → LAO，心衰/迷走 → 超声视角，卵圆孔未闭/房间隔缺损 → 负责人自己选的房间隔视角），三维尚未显示时于显示时应用。由 Claude 按负责人指示实施。
 - 2026-10-11：切换情景时三维心脏自动换到最能表现该病的视图（与网站共用 `js/scenario-views.js`，由 `tools/sync-from-web.mjs` 复制到 `engine/`）：传导阻滞、预激、房颤 → 传导；主动脉瓣狭窄、二尖瓣反流、卵圆孔未闭、运动 → 血流；心衰、迷走 → 充盈；正常 → 解剖；心腔壁不透明度用各视图的预设值。三维心脏尚在载入或停放在二维心脏后面时，显示时再应用。由 Claude 按负责人指示实施。
@@ -110,6 +111,14 @@
 MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC BY-SA），已修改，详见网站说明。
 
 ## 开发记录
+
+### 2026-10-20：胸导联 V1–V6 标签（CC-55）
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)。负责人指示「port the chest-lead tab to the WeChat mini program, test it, and commit and push … Don't upload to WeChat」。
+
+- 改动：`tools/sync-from-web.mjs`（复制 `ecg12.js`、`ecg12-modifiers.js` 与 `chest-leads-view.js`，生成 `data/ecg12.js`）；`pages/lab/lab.js`（标签、显示方式、导联高亮、说明、读数、触摸定位、数值表）；`pages/lab/lab.wxml`、`lab.wxss`；新增 `tools/chest-leads.test.mjs`。网站 `js/chest-leads-view.js` 同日加了 `readoutRows()` / `findingItems()`，读数与说明元素可不传，供小程序用 WXML 显示。
+- 验证：`node --test tools/*.test.mjs` 31/31（新增 5 项：14 个情景都有胸导联文件、中英文字一致；真实页面定义加假画布，切换标签、绑定画布、说明与高亮、读数、点按导联定位与图纸模式不定位、数值表含 V1–V6；复制的模块与网站逐字节相同）。Chrome 中用小程序自己的 `engine/` 副本与 `mp-dom.js` 在 375 px 宽绘制右束支阻滞（随心动周期）、房颤与三度阻滞（心电图纸），无页面错误。主包增加约 60 KB。
+- 未验证：微信开发者工具与真机（canvas 原生层、触摸坐标、离屏画布 drawImage）；未上传、未发布。
 
 ### 2026-10-11：二维心脏同步电传导动画
 

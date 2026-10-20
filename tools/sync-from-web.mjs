@@ -26,6 +26,8 @@ const ENGINE = [
 const DOM_MODULES = [
   ["js/heart2d.js", "heart2d.js", "document"],
   ["js/engine/charts.js", "charts.js", "document, devicePixelRatio"],
+  // CC-55: the chest-lead (V1–V6) view; its stylesheet import is dropped.
+  ["js/chest-leads-view.js", "chest-leads-view.js", "document, devicePixelRatio"],
 ];
 
 await mkdir("engine", { recursive: true });
@@ -33,14 +35,16 @@ for (const file of ENGINE)
   await writeFile(join("engine", file), await readFile(join(web, "js/engine", file)));
 // Plain modules from the web app's js/ folder, copied with their engine
 // import paths flattened (engine/ is one folder here).
-const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js"];
+const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js", "ecg12.js", "ecg12-modifiers.js"];
 for (const file of PLAIN)
   await writeFile(join("engine", file), (await readFile(join(web, "js", file), "utf8")).replaceAll('from "./engine/', 'from "./'));
 for (const [source, target, globals] of DOM_MODULES) {
-  const code = (await readFile(join(web, source), "utf8")).replaceAll('from "./engine/', 'from "./');
+  const code = (await readFile(join(web, source), "utf8"))
+    .replaceAll('from "./engine/', 'from "./')
+    .replace(/^import "\.\/[\w-]+\.css";\n/m, "");
   await writeFile(
     join("engine", target),
-    `// Copied by tools/sync-from-web.mjs from ${source}; only this line is added.\nimport { ${globals} } from "./mp-dom.js";\n` + code,
+    `// Copied by tools/sync-from-web.mjs from ${source}; only this line is added (and any stylesheet import removed).\nimport { ${globals} } from "./mp-dom.js";\n` + code,
   );
 }
 
@@ -54,4 +58,10 @@ await save("scenarios.js", await Promise.all(ids.map((id) => json(`content/scena
 await save("atrial-volume.js", await json("content/atlas-atrial-volume.json"));
 await save("labels.js", { en: await json("content/labels.en.json"), zh: await json("content/labels.zh.json") });
 await save("heart-labels.js", { en: await json("assets/heart-labels.en.json"), zh: await json("assets/heart-labels.zh.json") });
-console.log(`synced ${ENGINE.length + DOM_MODULES.length + PLAIN.length} engine files and 5 data modules`);
+// CC-55: chest-lead patterns (one per scenario; the website's coverage gate
+// guarantees each exists) and their interface labels.
+await save("ecg12.js", {
+  entries: Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await json(`content/ecg12/${id}.json`)]))),
+  labels: await json("content/ecg12/labels.json"),
+});
+console.log(`synced ${ENGINE.length + DOM_MODULES.length + PLAIN.length} engine files and 6 data modules`);

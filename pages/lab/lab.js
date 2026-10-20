@@ -17,6 +17,9 @@ import { Heart2DView } from "../../engine/heart2d.js";
 import { SvgElement, controls, adoptCanvas, devicePixelRatio } from "../../engine/mp-dom.js";
 import { SvgPainter } from "../../engine/svg-canvas.js";
 import { scenarioView } from "../../engine/scenario-views.js";
+import ecg12 from "../../data/ecg12.js";
+import { ChestLeadsView } from "../../engine/chest-leads-view.js";
+import { buildEcg12Spec, leadVoltages, CHEST_LEADS } from "../../engine/ecg12.js";
 
 const PRESETS = ["anatomy", "xray", "conduction", "filling", "flow"];
 const VERSION = "1.0.0"; // the website's package.json version this copy follows
@@ -143,7 +146,8 @@ const i18n = {
   language: "zh",
   dictionaries: labels, // read by the 3D heart (AtlasLabView)
   t(key) {
-    return OVERRIDES[this.language][key] ?? labels[this.language][key] ?? labels.en[key] ?? key;
+    // ecg12.labels: the chest-lead tab's own strings (website content/ecg12/labels.json).
+    return OVERRIDES[this.language][key] ?? labels[this.language][key] ?? ecg12.labels[this.language]?.[key] ?? labels.en[key] ?? ecg12.labels.en[key] ?? key;
   },
   local(value) {
     return typeof value === "object" ? (value?.[this.language] ?? value?.en ?? "") : (value ?? "");
@@ -156,6 +160,7 @@ const TEXT_KEYS = [
   "rightHeart", "readValues", "sounds", "muted", "unmuted",
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
+  "tabWiggers", "tabChest", "chestModeSync", "chestModePaper", "chestFindings", "chestNote",
   "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
 ];
 
@@ -209,6 +214,12 @@ Page({
     audioEnabled: false,
     audioBusy: false,
     dialog: null, // "values" | "help"
+    // CC-55: the Wiggers card shows the Wiggers strips or the chest leads V1–V6.
+    ecgTab: "wiggers",
+    chestMode: "sync",
+    chestKey: false, // this scenario's key ECG finding is in the chest leads
+    chestRows: [],
+    chestFindings: [],
     valueRows: [],
   },
 
@@ -383,8 +394,14 @@ Page({
     this.audio?.setCycle(this.series);
     const schedule = model.phaseSchedule(clock.hr, clock.beatIndex);
     this.charts?.setData(this.series, schedule, baseline, this.data.sideIndex ? "right" : "left");
+    if (this.chest) {
+      if (this.chest.spec?.scenarioId !== model.scenario.id) this.chest.setScenario(this.chestSpec(), ecg12.entries[model.scenario.id]);
+      this.chest.setData({ series: this.series, schedule, beatIndex: clock.beatIndex, sameBeat: !!this.sameBeats, hr: clock.hr, modifiers: this.modifiers });
+    }
     const T = model.cycleDuration(clock.hr, clock.beatIndex);
     this.setData({
+      chestKey: !!ecg12.entries[model.scenario.id]?.keyFinding,
+      chestFindings: this.chest ? this.chest.findingItems() : [],
       phases: schedule.map((p, index) => ({
         index,
         no: String(index + 1).padStart(2, "0"),
@@ -432,6 +449,7 @@ Page({
       if (seen.strips || seen.pv) this.charts.update(sample, this.data.relations);
       else if (seen.ap) this.charts.renderAP(sample);
     }
+    if (this.chest && this.chartsSeen.chestStrips !== false) this.chest.update(sample);
     const frame = { model, sample, t: clock.t, hr: clock.hr, beatIndex: beat, modifiers: this.modifiers, baseline };
     if (this.data.heartModel === "atlas") {
       if (this.atlas) this.stepAtlas(frame, atlasForce);
@@ -460,6 +478,7 @@ Page({
       phaseIndex: sample.phaseIndex,
       currentPhase: i18n.local(sample.phase.name),
       soundCaption: (sounds.join(" · ") || "S1 · S2") + "  ·  " + i18n.t(this.audio?.enabled ? "unmuted" : "muted"),
+      ...(this.chest && { chestRows: this.chest.readoutRows(sample).map(([k, v]) => ({ k, v })) }),
     });
   },
   // ---- canvases ----------------------------------------------------------
@@ -490,13 +509,101 @@ Page({
     const [strips, pv, ap] = await Promise.all(["strips", "pv", "ap"].map((id) => this.bindCanvas(id, "raw")));
     if (!this.data.docked) await this.bindCanvas("heart");
     this.charts = new Charts(
-      adoptCanvas(strips.node, strips.w, strips.h),
+      this.stripsNode(strips),
       adoptCanvas(pv.node, pv.w, pv.h),
       adoptCanvas(ap.node, ap.w, ap.h, () => !this.chartsSeen.ap),
       i18n,
     );
+    if (this.data.ecgTab === "chest") await this.attachChest();
+    else this.chest = null;
     this.watchCharts();
     this.rebuild();
+  },
+  // ---- chest leads V1–V6 (CC-55) -------------------------------------------
+  // The Wiggers strips' canvas exists only on the Wiggers tab (wx:if); on the
+  // chest-lead tab the charts draw their strips offscreen.
+  stripsNode(entry) {
+    if (entry?.node) return adoptCanvas(entry.node, entry.w, entry.h);
+    return adoptCanvas(wx.createOffscreenCanvas({ type: "2d", width: 1, height: 1 }), 360, 412);
+  },
+  chestSpec() {
+    const scenario = this.model.scenario;
+    if (!this.chestSpecs) this.chestSpecs = new Map();
+    if (!this.chestSpecs.has(scenario.id)) this.chestSpecs.set(scenario.id, buildEcg12Spec(scenario, ecg12.entries[scenario.id], baseline));
+    return this.chestSpecs.get(scenario.id);
+  },
+  async attachChest() {
+    const [strips, diagram] = await Promise.all([this.bindCanvas("chestStrips", "raw"), this.bindCanvas("chestDiagram", "raw")]);
+    if (!strips || !diagram) return (this.chest = null);
+    this.chest = new ChestLeadsView({
+      strips: adoptCanvas(strips.node, strips.w, strips.h),
+      diagram: adoptCanvas(diagram.node, diagram.w, diagram.h),
+      readout: null, // rendered in WXML from readoutRows()
+      findings: null, // rendered in WXML from findingItems()
+      i18n,
+    });
+    this.chest.setMode(this.data.chestMode);
+    this.chest.setScenario(this.chestSpec(), ecg12.entries[this.model.scenario.id]);
+  },
+  setEcgTab(e) {
+    const tab = e.currentTarget.dataset.tab;
+    if (tab === this.data.ecgTab) return;
+    if (tab === "chest") this.canvases.strips = null; // about to go
+    else this.chest = null;
+    this.setData({ ecgTab: tab, chestRows: [] }, async () => {
+      if (!this.charts) return;
+      if (tab === "chest") {
+        this.charts.strips = this.stripsNode(null);
+        await this.attachChest();
+      } else {
+        this.charts.strips = this.stripsNode(await this.bindCanvas("strips", "raw"));
+      }
+      this.watchCharts();
+      this.rebuild();
+    });
+  },
+  setChestMode(e) {
+    const mode = e.currentTarget.dataset.mode;
+    this.setData({ chestMode: mode });
+    this.chest?.setMode(mode);
+  },
+  toggleFinding(e) {
+    if (!this.chest) return;
+    this.chest.toggleFinding(Number(e.currentTarget.dataset.index));
+    this.setData({ chestFindings: this.chest.findingItems() });
+  },
+  // Chest strips: in the cycle-synced mode a tap or drag seeks like the
+  // Wiggers strips; a tap on a lead row also lights that lead.
+  chestStart(e) {
+    const { x, y } = e.touches[0], plot = this.chest?.mode === "sync" && this.chest.inPlot(x);
+    if (plot) this.plotResume.begin();
+    this.chestDrag = { startX: x, startY: y, active: false, plot };
+  },
+  chestMove(e) {
+    const d = this.chestDrag;
+    if (!d?.plot) return;
+    const x = e.touches[0].x;
+    if (!d.active && Math.abs(x - d.startX) < 6) return;
+    d.active = true;
+    this.seekStrip(x, false, this.chest);
+  },
+  chestEnd() {
+    const d = this.chestDrag;
+    this.chestDrag = null;
+    if (!d || !this.chest) return;
+    if (!d.active) {
+      const lead = this.chest.leadAt(d.startY);
+      if (lead) {
+        this.chest.toggleLead(lead);
+        this.setData({ chestFindings: this.chest.findingItems() });
+      }
+      if (d.plot) this.seekStrip(d.startX, true, this.chest);
+    } else this.update(true, true);
+    if (d.plot) this.plotResume.end();
+  },
+  chestCancel() {
+    if (this.chestDrag?.plot) this.plotResume.end();
+    this.chestDrag = null;
   },
   // The 3D heart's motion step (the website's motion pipeline) costs ~12 ms on
   // a desktop and several times that on phones. It runs at most at a rate that
@@ -568,7 +675,7 @@ Page({
       this.inFrame = false;
     }
     // WebGL frames are presented on their own canvas's frame callback.
-    const target = (this.data.heartModel === "atlas" && this.canvases.atlas) || this.activeHeart() || this.canvases.strips;
+    const target = (this.data.heartModel === "atlas" && this.canvases.atlas) || this.activeHeart() || this.canvases.strips || this.canvases.chestStrips;
     if (target?.node?.requestAnimationFrame) target.node.requestAnimationFrame(() => this.loop(token));
     else setTimeout(() => this.loop(token), 16);
   },
@@ -632,6 +739,7 @@ Page({
       [i18n.t("time"), `${s.t.toFixed(1)} ms`],
       [i18n.t("heartRate"), `${this.clock.hr} bpm`],
       [i18n.t("ecg"), `${s.ecg.toFixed(2)} mV`],
+      ...Object.entries(leadVoltages(s, this.chestSpec(), CHEST_LEADS)).map(([lead, v]) => [lead, `${v.toFixed(2)} mV`]),
       ...Object.entries(s.pressures).map(([id, v]) => [i18n.t(`pressure.${id}`), `${v.toFixed(1)} mmHg`]),
       [i18n.t("lvVolume"), `${s.volume.lv.toFixed(1)} mL`],
       ...Object.entries(s.valves).map(([id, v]) => [i18n.t(id), `${i18n.t(v.open ? "open" : "closed")} · ΔP ${v.gradient.toFixed(1)} mmHg`]),
@@ -1053,8 +1161,8 @@ Page({
     this.drag = null;
     this.plotResume.end();
   },
-  seekStrip(x, final = false) {
-    const t = this.charts.timeAt(x);
+  seekStrip(x, final = false, chart = this.charts) {
+    const t = chart.timeAt(x);
     this.plotResume.pause(this.clock.playing);
     this.clock.playing = false;
     const changed = selectPfoInspectionBeat(this.model, this.clock);

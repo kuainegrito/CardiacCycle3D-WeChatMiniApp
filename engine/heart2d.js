@@ -1,4 +1,4 @@
-// Copied by tools/sync-from-web.mjs from js/heart2d.js; only this line is added.
+// Copied by tools/sync-from-web.mjs from js/heart2d.js; only this line is added (and any stylesheet import removed).
 import { document } from "./mp-dom.js";
 import { Conduction2D } from "./heart2d-conduction.js";
 // CC-30: the 2D heart. An original frontal-section drawing in the style of the
