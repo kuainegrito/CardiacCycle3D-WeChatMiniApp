@@ -140,9 +140,9 @@ const LOAD_TIPS = {
   ],
 };
 // The warm-up (warmAtlas) counts as part of building the 3D heart (owner, 2026-10-20).
-// The one-time "turn the heart" hint (owner, 2026-10-20): 30 s after the 3D
+// The one-time "turn the heart" hint (owner, 2026-10-20): 15 s after the 3D
 // heart has loaded without a touch on it, shown for 3 s, once per visit.
-const ROTATE_HINT_DELAY_MS = 30000;
+const ROTATE_HINT_DELAY_MS = 15000;
 const ROTATE_HINT_SHOW_MS = 3000;
 const LOAD_STEPS = ["glb", "engine", "build"];
 const i18n = {
