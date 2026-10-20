@@ -66,7 +66,6 @@ const OVERRIDES = {
     "load.glbCached": "读取心脏模型（本机已缓存）",
     "load.engine": "载入三维引擎",
     "load.build": "构建三维心脏",
-    "load.warm": "预热，让心脏一出现就在跳",
     loadSlow: "网络较慢时，可先点左侧「二维心脏」；三维心脏会在后台继续载入，好了会在右上角提示。",
     loadSlowDownload: "网络较慢时，可先点左侧「二维心脏」；模型会在后台继续下载，之后再切回「三维心脏」即可。",
     atlasStandby: "三维心脏已载入 · 点此切换",
@@ -96,7 +95,6 @@ const OVERRIDES = {
     "load.glbCached": "Reading the heart model (saved on this phone)",
     "load.engine": "Loading the 3D engine",
     "load.build": "Building the 3D heart",
-    "load.warm": "Warming up, so it beats from the start",
     loadSlow: "On a slow network, tap “2D heart” on the left; the 3D heart keeps loading, and a note in the top-right corner says when it is ready.",
     loadSlowDownload: "On a slow network, tap “2D heart” on the left; the model keeps downloading, and you can switch back to the 3D heart later.",
     atlasStandby: "3D heart ready · tap to switch",
@@ -141,7 +139,8 @@ const LOAD_TIPS = {
     "When the heart rate rises, diastole is what shortens most.",
   ],
 };
-const LOAD_STEPS = ["glb", "engine", "build", "warm"];
+// The warm-up (warmAtlas) counts as part of building the 3D heart (owner, 2026-10-20).
+const LOAD_STEPS = ["glb", "engine", "build"];
 const i18n = {
   language: "zh",
   dictionaries: labels, // read by the 3D heart (AtlasLabView)
@@ -954,15 +953,14 @@ Page({
         node.removeEventListener("pointerup", view.handlePointerUp);
         view.presetPending = true;
       }
-      this.markStep("build", "done");
       // A newly built heart takes the chosen view; a parked one keeps its own
       // (including a custom wall opacity).
       if (view.presetPending) {
         view.presetPending = false;
         view.setPreset(this.data.preset);
       }
-      this.markStep("warm", "active");
       await this.warmAtlas(view);
+      this.markStep("build", "done");
       if (!current()) {
         // The 2D heart was chosen during the warm-up: keep the heart parked.
         if (!this.unloaded && this.parkAtlas(view)) {
@@ -1000,7 +998,6 @@ Page({
     const steps = this.atlasSteps;
     if (this.parkedAtlas) Object.assign(steps, { glb: "done", engine: "done", build: "done" });
     if (steps.glb === "wait") steps.glb = "active";
-    steps.warm = "wait";
     this.load = { started: Date.now() };
     prefetchAtlas().then(() => this.markStep("glb", "done"), () => {});
     this.loadTimer = setInterval(() => this.renderLoadCard(), 1000);
@@ -1418,7 +1415,7 @@ function retryOnce(run) {
 // One download per launch, shared by the prefetch in onLoad and the 3D heart;
 // a failed one is forgotten so choosing the 3D heart again starts afresh.
 let atlasGlb = null, atlasGlbCached = false;
-const freshSteps = () => ({ glb: "wait", engine: "wait", build: "wait", warm: "wait" });
+const freshSteps = () => ({ glb: "wait", engine: "wait", build: "wait" });
 // Off-screen WebGL2 (wx.createOffscreenCanvas) lets the 3D heart be built
 // without a canvas on the page. Probed once; a build that fails there for
 // any reason other than the network marks it broken for this launch.
