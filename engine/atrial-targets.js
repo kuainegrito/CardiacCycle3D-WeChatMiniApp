@@ -49,7 +49,7 @@ export function validateAtrialTargets(settings) {
 export function organizedAtrialProgress(sample, t) {
   const c = sample.conduction,
     timing = sample.timing;
-  if (c.fibrillating || c.dissociated) return -1;
+  if (c.fibrillating || c.dissociated || ["vf", "asystole"].includes(c.rhythm)) return -1;
   const start = timing.saStart + 80 * timing.atrialScale;
   const end = sample.schedule[0].end;
   const duration = Math.max(1, Math.min(100 * timing.atrialScale, end - start));
@@ -240,7 +240,7 @@ export function atrialBeatTable(
     cache = cacheFor(model, settings);
   return remember(
     cache.tables,
-    `${hr}|${beatIndex}|${JSON.stringify(modifiers)}`,
+    `${hr}|${beatIndex}|${JSON.stringify(modifiers)}|${model.ectopy?.version ?? 0}`,
     () => beatTable(model, hr, modifiers, beatIndex, t),
   );
 }

@@ -91,6 +91,7 @@
 - 2026-10-20：帮助窗口删去「页面底部有小测，可检验理解。」一句（英文对应句一并删除）。注意 `data/labels.js` 由 `tools/sync-from-web.mjs` 从网站 `content/` 生成，网站源文案未改，下次同步会带回这句；如需保留删除，应同时改网站源。由 Kimi（Moonshot AI）按负责人指示实施；未上传微信。
 - 2026-10-23（同步网站 CC-57…59，小程序 CC-60）：异位刺激。Wiggers 卡片新增「⚡ 异位刺激」按钮与第三个标签「节律条」：刺激落在心室有效不应期内无反应；之后出现一次室性期前收缩（宽 QRS、每搏量小，早的可以推不开主动脉瓣），随后完全代偿间歇（前后两个 RR 之和 = 两个窦性 RR）和间歇后增强的一拍；结果行写出这些数值，暂停时点按钮会在光标时刻施加并继续播放，第一次刺激自动切到节律条。节律条（最近 4 秒的Ⅱ导联、主动脉压、左室容积，标出刺激、不应期、RR 与「= 2 × RR」）、胸导联的期前形态与发现、二维心脏从右室起搏点出发的激动波与 ⚡、三维传导视图的异位激动场、期前收缩心音都直接用网站的代码。房颤、三度房室阻滞按钮禁用；切换情景、改心率或负荷时清空。帮助文字加了一段说明。网站来源：分支 `claude/cc57-ectopy-engine` 的 `2accc610`（尚未并入网站 `master`，网站也未部署）。由 Claude 按负责人指示实施；未上传微信。
 - 2026-10-23（二）（同步网站 CC-61 修复，`claude/cc57-ectopy-engine` 的 `81218f29`）：关闭「循环」时点 ⚡，期前收缩、代偿间歇和间歇后增强的一拍照常播放，停在间歇后那一拍末尾（原先时钟停在刺激时刻）；点 ⚡ 后不再卡一下：心脏在刺激时刻停几帧，期前拍分帧预备好再继续；期前拍与间歇后拍的二维充盈、三维流入按本拍计算。由 Claude 按负责人指示实施；未上传微信。
+- 2026-10-23（三）（同步网站 CC-63/64 与卡死修复，`claude/cc57-ectopy-engine` 的 `d11e5885`）：心室颤动与 AED；修复点 ⚡ 后可能卡死（射血期或拍首 t = 0 刺激时三维心脏抛错，整页停住）和节律条两拍重叠。情景列表新增「心室颤动」；「易损期」开关打开时，在 T 波顶峰 ±20 ms 点 ⚡ 会诱发室颤；「AED」分析约 2 秒，室颤才建议电击，出现「⚡ 电击」；首次电击即成功（演示），电静止 1.5 秒后窦性恢复。节律条、二维心脏（心室微颤、无序小波）与三维心脏（心室着色器微动、传导视图的无序小波）都直接用网站代码。结果行注明「原理演示，不是 AED 操作培训」。由 Claude 按负责人指示实施；未上传微信。
 
 ## 与网站的差异
 
@@ -296,3 +297,16 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - 测试：`tools/ectopy.test.mjs` 的播放改为按页面自己的帧循环（等待、循环规则、时钟、新拍、预备）推进；新增 2 项：刺激后时钟在刺激时刻不动、预备好后进入期前拍且曲线是预备好的 400 个期前拍样本；关闭循环时停在间歇后那一拍末尾、开关仍为关闭，无刺激时仍停在本拍末尾。
 - 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 37/37；`check-ectopy-bundle`、`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。
 - 未验证：微信开发者工具与真机（等待几帧在真机上的观感、iOS 上的耗时）；未上传、未发布。网站分支仍未并入 `master`，小程序不应在网站发布前上传。
+
+### 2026-10-23（三）：心室颤动、易损期与 AED（网站 CC-63/64）
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)。负责人指示「Sync CC-63/64 from claude/cc57-ectopy-engine into the WeChat mini program: re-sync engine/data, rebuild the 3D bundle, port the AED UI to the lab page as far as it fits, test, commit and push there. Don't upload to WeChat.」网站来源：`claude/cc57-ectopy-engine` 的 `d11e5885`（CC-63 室颤与电击引擎、CC-64 AED 界面，由 OpenAI Codex 完成，与 CC-61 修复合并；含负责人报告「点击"异位刺激"后可能会导致卡死……有时候波形出现严重问题」后的网站修复，见网站 `docs/CC61_FREEZE_FIX.md`），未并入网站 `master`。
+
+- **卡死与波形重叠**（网站修复，随同步带来）：射血期刺激的期前拍不射血（EDV = ESV），三维运动管线的负荷响应抛错；拍首 t = 0 的刺激截出长度 0 的拍，三维心房容积表抛错；两者都在帧循环里，页面停住。网站引擎现在让这种期前拍的射血幅度为 0、事件离拍首至少 1 ms。实验室页的节律条在刺激时只拿到刺激前的曲线（原先拿到整拍窦性曲线，剩下部分画在期前拍上）。新增 `tools/check-stimulus-bundle.mjs`（实际三维包对不射血的期前拍和 t = 0 刺激后的拍定位无错）与 `tools/ectopy.test.mjs` 一项（t = 0 刺激后时钟继续；节律条截短拍不超过刺激时刻）。
+
+- 同步：`tools/sync-from-web.mjs` 加复制 `js/vf-view.js`（`heart2d.js` 引用它的心室微颤位移）；重新同步后 `engine/ectopy.js`（室颤、电击、电静止的节律事件）、`heart2d.js`、`heart2d-conduction.js`、`ectopy-view.js`（节律条的室颤与电击标记）、`ecg12.js`、`scenario-views.js`（室颤用传导视图）、`atrial-targets.js`、`atlas-valve-flow.js`、`inflow.js`、`beats.js` 与 `data/scenarios.js`（新情景「心室颤动」）、`data/ecg12.js`、`data/ectopy.js`（AED 文字）改变；`vendor/atlas3d.js` 重新打包（含网站 `atlas-lab-view.js` 的室颤着色器层，模型文件名不变）。
+- 实验室页（`pages/lab/lab.js`、`lab.wxml`、`lab.wxss`）：刺激按钮一行加「易损期」开关（默认关）、「AED」按钮与仅在建议电击时出现的「⚡ 电击」；网站 `js/aed.js` 直接操作 DOM，这里按同样的状态机（空闲 → 分析 2 秒 → 建议 / 不建议 → 电击）写在页面里：分析结束时和真正电击时都重新读取模型的节律，切换情景、改心率或负荷（`resetEctopy`）、新的刺激都取消分析；室颤刺激当帧重建（节律事件，没有期前拍可预备）；结果行与数值表区分室颤、电击后电静止与窦性；室颤情景下结果行写「心室颤动：心室无有效输出」。
+- 与网站的差异：没有快捷键、学习记录与行为统计（小程序本来就没有）；AED 结果与刺激结果共用一个位置（AED 状态不是空闲时显示 AED 文字）。
+- 测试：`tools/ectopy.test.mjs` 新增 2 项（易损期关时 T 波顶峰仍是期前收缩；窦性不建议电击；易损期开时诱发室颤、未分析不能电击、分析后建议、电击成功、电静止后恢复窦性；分析中切换情景取消且旧分析不会回来；室颤情景的文字与建议），复制模块比较加 `beats.js`、`vf-view.js` 与室颤情景；新增 `tools/check-vf-bundle.mjs`：实际三维包在网站生产运动模型上建好室颤层，室颤时开启（传导视图有无序小波、有序传导关闭）、随模型绝对时间变化，电击后电静止与窦性时关闭。
+- 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 40/40；`check-stimulus-bundle`、`check-vf-bundle`、`check-ectopy-bundle`、`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。
+- 未验证：微信开发者工具与真机（刺激一行在 320 px 宽时换行的观感、三维室颤着色器在真机上的绘制与耗时、2 秒分析计时）；未上传、未发布。网站分支未并入 `master`，小程序不应在网站发布前上传。

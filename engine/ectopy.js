@@ -1,13 +1,12 @@
 // CC-57: the heart's event layer and the ectopic stimulus beat plan
 // (docs/CC57_61_ECTOPIC_STIMULUS_PLAN.md sections 3 and 10.2; record
-// docs/CC57_ECTOPY_ENGINE.md). No user interface yet (CC-58).
+// docs/CC57_ECTOPY_ENGINE.md; VF/shock contract: docs/CC63_VF_ENGINE.md).
 //
 // The model (waveforms.js) plays template beats: beat b is the 800 ms template
 // scaled to the sinus cycle T. A model owns one event list here. Events carry
 // a `type` and the rhythm they happened in; the model's rhythm state is
-// `rhythm`. This version implements `type: 'stimulus'` in `rhythm: 'sinus'`
-// only; AED shocks and ventricular fibrillation (CC-63/64) add their own types
-// and rhythm states to the same list.
+// `rhythm`. CC-63 extends this list with VF induction and shock events;
+// rhythmAt() resolves their arrest, electrical pause and sinus recovery.
 //
 // A stimulus at time c of beat k is either refractory (inside the ventricular
 // effective refractory period of the last ventricular excitation, the same
@@ -46,8 +45,22 @@ import { reducedFillingFraction } from "./reduced-filling.js";
 import { interatrialState } from "./foramen-ovale.js";
 
 export const ECTOPY_VERSION = 1;
-export const EVENT_TYPES = Object.freeze(["stimulus"]);
-export const RHYTHMS = Object.freeze(["sinus"]);
+export const EVENT_TYPES = Object.freeze(["stimulus", "shock"]);
+export const RHYTHMS = Object.freeze(["sinus", "vf", "asystole"]);
+export const SHOCK_PAUSE_MS = 1500;
+// Deterministic, non-periodic on the displayed beat grid; all carriers 4–8 Hz.
+export const vfVoltage = (absoluteMs) => {
+  const s = absoluteMs / 1000;
+  return (
+    0.55 * Math.sin(2 * Math.PI * 5.3 * s) +
+    0.27 * Math.sin(2 * Math.PI * 7.1 * s + 0.7) +
+    0.18 * Math.sin(2 * Math.PI * 4.2 * s + 2)
+  );
+};
+// CC-61: no event cuts a beat closer than this to its start (ms). A stimulus
+// at t = 0 left a beat of zero length, whose per-beat tables (atrial volume)
+// cannot be built; such a stimulus lands 1 ms into the beat instead.
+export const MIN_CUT_MS = 1;
 export const ECTOPY_DEFAULTS = Object.freeze({
   site: "rv",
   // Stimulus to ventricular excitation (ms), and the PVC's QRS width before
@@ -119,14 +132,24 @@ export function validEctopyState(s) {
   if (!Array.isArray(s.beats) || s.beats.length > ECTOPY_DEFAULTS.maxEvents) return false;
   if (!Object.values(EVENT_COLUMNS).every((c) => Array.isArray(s[c]) && s[c].length === s.beats.length)) return false;
   let previous = -Infinity;
+  let previousSinus = -Infinity;
+  let previousCut = -Infinity;
   for (const e of ectopyEvents(s)) {
     if (!EVENT_TYPES.includes(e.type) || !RHYTHMS.includes(e.rhythm)) return false;
     if (!Number.isInteger(e.beat) || !finite(e.beat, 0, 100000)) return false;
-    if (!finite(e.cutMs, 0, 2250) || !finite(e.hr, 40, 180)) return false;
+    if (!finite(e.cutMs, MIN_CUT_MS, e.rhythm === "sinus" ? 2250 : 3000) || !finite(e.hr, 40, 180)) return false;
     if (e.site !== "rv" || !["own", "next"].includes(e.blocks)) return false;
     // A premature beat cannot itself be cut (one per sinus cycle).
-    if (e.beat < previous + 2) return false;
+    if (e.beat < previous) return false;
+    if (e.beat === previous && e.cutMs <= previousCut) return false;
+    if (e.type === "stimulus" && e.rhythm === "sinus") {
+      if (e.beat < previousSinus + 2) return false;
+      previousSinus = e.beat;
+    }
+    if (e.type === "shock" && e.rhythm !== "asystole") return false;
+    if (e.type === "stimulus" && e.rhythm === "asystole") return false;
     previous = e.beat;
+    previousCut = e.cutMs;
   }
   return true;
 }
@@ -172,7 +195,9 @@ export function createEctopy(host) {
   // The events at this rate, oldest first. Events taken at another rate are
   // ignored there (CC-58: the lab clears the plan when the rate changes).
   const eventsAt = (hr) =>
-    remember(plans, `${version}|${hr}`, 16, () => events.filter((e) => e.hr === hr));
+    remember(plans, `${version}|${hr}`, 16, () =>
+      events.filter((e) => e.hr === hr && e.type === "stimulus" && e.rhythm === "sinus"),
+    );
   // What display beat `beat` is at this rate: null when there is no event.
   function describe(hr, beat) {
     const list = eventsAt(hr);
@@ -266,7 +291,7 @@ export function createEctopy(host) {
         for (let i = 1; i < ej.length; i++) {
           const dtj = ej[i].t - ej[i - 1].t,
             up = key === "ao" ? "lv" : "rv";
-          integral += (((ej[i][key] + ej[i - 1][key]) / 2) - floor) * dtj;
+          integral += ((ej[i][key] + ej[i - 1][key]) / 2 - floor) * dtj;
           gradient += Math.max(0, (ej[i][up] - ej[i][key] + ej[i - 1][up] - ej[i - 1][key]) / 2) * dtj;
         }
         const sv = ej[0].V - ej.at(-1).V,
@@ -326,7 +351,8 @@ export function createEctopy(host) {
         lat = clamp((own ? sinusTiming.qrsStart : T + sinusTiming.qrsStart) - c - 0.5, 0.5, D.latencyMs),
         { since } = sinceExcitation(hr, desc.event.beat, c, desc.old),
         erp = phys.ventricularErpMs * rs,
-        strength = D.contractility * (1 - D.restitutionDepth * Math.exp(-Math.max(0, since - erp) / (D.restitutionMs * rs)));
+        strength =
+          D.contractility * (1 - D.restitutionDepth * Math.exp(-Math.max(0, since - erp) / (D.restitutionMs * rs)));
       // Mechanical onset: not before the previous beat has relaxed (no
       // summation); when the PVC takes this beat's own QRS, before the sinus
       // contraction would have started.
@@ -351,7 +377,7 @@ export function createEctopy(host) {
         rows = new Array(n + 1),
         lvEnd = ref.grid.at(-1).lv,
         rvEnd = ref.grid.at(-1).rv,
-        rho = strength * Math.max(0, start.volume - V0) / Math.max(1, ref.edv - V0);
+        rho = (strength * Math.max(0, start.volume - V0)) / Math.max(1, ref.edv - V0);
       let V = start.volume,
         A = start.pressures.ao,
         Pa = start.pressures.pa,
@@ -374,14 +400,17 @@ export function createEctopy(host) {
         if (Q > 0) ejected = true;
         if (Qp > 0) pulmonaryOpen = true;
         V = Math.max(V0 + 1, V - Q * dt);
-        A += (Q - (A - ao.floor) / ao.R) * dt / ao.C;
-        Pa += (Qp - (Pa - pu.floor) / pu.R) * dt / pu.C;
+        A += ((Q - (A - ao.floor) / ao.R) * dt) / ao.C;
+        Pa += ((Qp - (Pa - pu.floor) / pu.R) * dt) / pu.C;
       }
       // One ejection per valve: where the weak beat's pressure only just
       // matches the artery's, the valve would open and shut several times.
       // From the first to the last opening the artery stays just below the
       // ventricle (by at most the gap the valve rule needs).
-      for (const [up, down] of [["lv", "ao"], ["rv", "pa"]]) {
+      for (const [up, down] of [
+        ["lv", "ao"],
+        ["rv", "pa"],
+      ]) {
         const open = rows.map((row) => row[up] > row[down] + 1e-6),
           first = open.indexOf(true),
           last = open.lastIndexOf(true);
@@ -489,7 +518,12 @@ export function createEctopy(host) {
       pressures.rv = template.rv;
       // Filling from the PVC's end-systolic volume to the next beat's start
       // plus the pause's extra filling, on the template's filling curve.
-      const tail = statePressures(sinusDesc(hr, desc.next), Math.max(t - p.L, -(p.T - p.oldSch[6].start)), hr, modifiers),
+      const tail = statePressures(
+          sinusDesc(hr, desc.next),
+          Math.max(t - p.L, -(p.T - p.oldSch[6].start)),
+          hr,
+          modifiers,
+        ),
         progress = fillingProgress(r, p.sch) / Math.max(1e-9, fillingProgress(refTime(p.sch, p.L - 1e-9), p.sch));
       volume = p.esv + (tail.volume + p.extra - p.esv) * clamp(progress, 0, 1);
     }
@@ -534,7 +568,12 @@ export function createEctopy(host) {
       tc = modulo(p.c + t, p.T),
       atrialStart = timing.saStart + 80 * timing.atrialScale,
       atrialDuration = Math.max(1, Math.min(100 * timing.atrialScale, p.oldSch[0].end - atrialStart));
-    const age = tc < p.oldSch[0].end ? tc - atrialStart : atrialStart < 0 && tc >= p.T + atrialStart ? tc - p.T - atrialStart : -1;
+    const age =
+      tc < p.oldSch[0].end
+        ? tc - atrialStart
+        : atrialStart < 0 && tc >= p.T + atrialStart
+          ? tc - p.T - atrialStart
+          : -1;
     if (age < 0 || age >= atrialDuration) return 0;
     return Math.max(0, host.lookup("la", (age / atrialDuration) * 100) - 10);
   }
@@ -551,9 +590,7 @@ export function createEctopy(host) {
     const T = desc.T,
       prev = describe(hr, desc.beat - 1),
       start =
-        desc.order === 1 && prev?.kind === "pvc"
-          ? pvcParams(prev, hr, modifiers).next
-          : { volume: 0, ao: 0, pa: 0 },
+        desc.order === 1 && prev?.kind === "pvc" ? pvcParams(prev, hr, modifiers).next : { volume: 0, ao: 0, pa: 0 },
       f = D.potentiation[desc.order - 1] ?? 1,
       sinus0 = host.pressureVolume(0, hr, modifiers, desc.sinus),
       ref = sinusRef(hr, modifiers),
@@ -621,7 +658,11 @@ export function createEctopy(host) {
       valves = valveStates(st.pressures, pressureAt, time, patch, phys.valveRampMs),
       interatrial =
         patch.pfo || patch.asd
-          ? interatrialState(st.pressures, Array.from({ length: 15 }, (_, i) => pressureAt(time - (i * phys.valveRampMs) / 15)), patch)
+          ? interatrialState(
+              st.pressures,
+              Array.from({ length: 15 }, (_, i) => pressureAt(time - (i * phys.valveRampMs) / 15)),
+              patch,
+            )
           : null,
       edv = base.edv + q.start.volume,
       esv = base.esv + q.dES,
@@ -646,7 +687,10 @@ export function createEctopy(host) {
       time = modulo(t, L),
       st = pvcState(desc, time, hr, modifiers),
       sch = p.sch,
-      index = Math.max(0, sch.findIndex((x) => time >= x.start && time < x.end)),
+      index = Math.max(
+        0,
+        sch.findIndex((x) => time >= x.start && time < x.end),
+      ),
       phase = sch[index],
       r = refTime(sch, time),
       sinusTiming = p.sinusTiming,
@@ -683,17 +727,26 @@ export function createEctopy(host) {
       valves = valveStates(st.pressures, pressureAt, time, patch, phys.valveRampMs),
       interatrial =
         patch.pfo || patch.asd
-          ? interatrialState(st.pressures, Array.from({ length: 15 }, (_, i) => pressureAt(time - (i * phys.valveRampMs) / 15)), patch)
+          ? interatrialState(
+              st.pressures,
+              Array.from({ length: 15 }, (_, i) => pressureAt(time - (i * phys.valveRampMs) / 15)),
+              patch,
+            )
           : null;
     const mechanical = time >= p.onset,
       sounds = {
         s1: mechanical ? lookup("s1", r) * Math.min(1, p.rho) : 0,
-        s2: p.ejected && mechanical ? lookup("s2", r) + (patch.splitS2Ms ? 0.85 * lookup("s2", r - patch.splitS2Ms) : 0) : 0,
+        s2:
+          p.ejected && mechanical
+            ? lookup("s2", r) + (patch.splitS2Ms ? 0.85 * lookup("s2", r - patch.splitS2Ms) : 0)
+            : 0,
         s3: mechanical ? lookup("s3", r) * (patch.s3 ?? 0) : 0,
         s4: 0,
         murmur:
           patch.murmur && p.ejected && mechanical
-            ? lookup(patch.murmur === "ejection" ? "murmurSystolic" : "murmurHolosystolic", r) * 0.6 * (patch.murmurGain ?? 1)
+            ? lookup(patch.murmur === "ejection" ? "murmurSystolic" : "murmurHolosystolic", r) *
+              0.6 *
+              (patch.murmurGain ?? 1)
             : 0,
       };
     const conduction = sampleConduction(time, L, timing, patch, absolute),
@@ -753,12 +806,150 @@ export function createEctopy(host) {
       onT: p.onT,
     };
   }
-  function sample(t, hr, modifiers, beatIndex) {
+  function baseSample(t, hr, modifiers, beatIndex) {
     const desc = describe(hr, beatIndex);
     if (!desc) return host.sinusSample(t, hr, modifiers, beatIndex);
     if (desc.kind === "pvc") return pvcSample(desc, t, hr, modifiers);
     if (desc.kind === "post") return postSample(desc, t, hr, modifiers);
     return host.sinusSample(t, hr, modifiers, desc.sinus);
+  }
+  // VF and shocks keep the existing beat partition. Events take effect at an
+  // absolute instant inside it, so neither an earlier sample nor a PVC's past
+  // is re-timed. Beats during arrest are display windows, not contractions.
+  const eventTime = (e) => (describe(e.hr, e.beat)?.start ?? e.beat * host.sinusDuration(e.hr, e.beat)) + e.cutMs;
+  const rhythmEvents = (hr) => events.filter((e) => e.hr === hr && e.rhythm !== "sinus");
+  function rhythmAt(beat, t, hr) {
+    const absolute = (describe(hr, beat)?.start ?? beat * host.sinusDuration(hr, beat)) + t;
+    const e = rhythmEvents(hr)
+      .filter((e) => eventTime(e) <= absolute)
+      .at(-1);
+    return e
+      ? e.type === "shock"
+        ? absolute - eventTime(e) < SHOCK_PAUSE_MS
+          ? "asystole"
+          : "sinus"
+        : "vf"
+      : patch.vf
+        ? "vf"
+        : "sinus";
+  }
+  const anchors = new Map();
+  function rhythmSample(s, hr, modifiers, before = Infinity) {
+    const list = rhythmEvents(hr).filter((e) => eventTime(e) <= s.absolute && eventTime(e) < before);
+    const e = list.at(-1);
+    if (!e && !patch.vf) return s;
+    const start = e ? eventTime(e) : 0;
+    const age = Math.max(0, s.absolute - start);
+    const key = `${version}|${hr}|${modKey(modifiers)}|${start}|${e?.type ?? "initial"}`;
+    const anchor = remember(anchors, key, 32, () => {
+      const raw = e ? baseSample(e.cutMs, hr, modifiers, e.beat) : host.sinusSample(0, hr, modifiers, 0);
+      return e ? rhythmSample(raw, hr, modifiers, start) : raw;
+    });
+    const shock = e?.type === "shock",
+      recovery = shock && age >= SHOCK_PAUSE_MS;
+    const rhythm = recovery ? "sinus" : shock ? "asystole" : "vf";
+    const T = host.sinusDuration(hr, 0);
+    const quiet = (dt) => ({
+      ao: 7 + (anchor.pressures.ao - 7) * Math.exp(-dt / 1200),
+      pa: 5 + (anchor.pressures.pa - 5) * Math.exp(-dt / 1200),
+      lv: 6 + (anchor.pressures.lv - 6) * Math.exp(-dt / 100),
+      rv: 3 + (anchor.pressures.rv - 3) * Math.exp(-dt / 100),
+      la: 8 + (anchor.pressures.la - 8) * Math.exp(-dt / 200),
+      ra: 5 + (anchor.pressures.ra - 5) * Math.exp(-dt / 200),
+    });
+    const fill = (dt) => anchor.edv + (anchor.volume.lv - anchor.edv) * Math.exp(-dt / 400);
+    let out = {
+      ...s,
+      pressures: quiet(age),
+      volume: { lv: fill(age), rv: fill(age) },
+      sv: 0,
+      forwardSV: 0,
+      ef: 0,
+      atrialKick: 0,
+      erp: false,
+      interatrial: undefined,
+      sounds: { s1: 0, s2: 0, s3: 0, s4: 0, murmur: 0 },
+      valves: Object.fromEntries(
+        Object.entries(s.valves).map(([k, v]) => [k, { ...v, open: false, blend: 0, flow: 0, regurgitant: false }]),
+      ),
+      ap: { sa: -60, atrial: -85, av: -60, purkinje: -90, ventricular: -90 },
+      conduction: { ...s.conduction, rhythm, absolute: s.absolute, ectopic: false, leftDelay: 0, rightDelay: 0 },
+      ectopy: { kind: rhythm, beat: s.ectopy?.beat, rhythm, shock: !!shock, recovery, ageMs: age },
+      phase: {
+        id: rhythm,
+        name: {
+          en: rhythm === "vf" ? "Ventricular fibrillation" : "Post-shock pause",
+          zh: rhythm === "vf" ? "心室颤动" : "电击后电静止",
+        },
+      },
+    };
+    const join = smooth(age / 30);
+    out.ecg = shock
+      ? (1 - smooth(age / 3)) * anchor.ecg +
+        (age < 60 ? 3 * Math.sin((Math.PI * age) / 15) * Math.sin((Math.PI * age) / 60) ** 2 : 0)
+      : anchor.ecg * (1 - join) + vfVoltage(s.absolute) * join;
+    if (rhythm === "vf") {
+      const tremor = 0.18 * join * Math.sin(s.absolute * 0.041);
+      out.volume = { lv: fill(age) + tremor, rv: fill(age) - tremor };
+      out.ap.ventricular = -45 + 25 * vfVoltage(s.absolute);
+    }
+    if (recovery) {
+      const elapsed = age - SHOCK_PAUSE_MS,
+        local = elapsed % T;
+      const normal = host.sinusSample(local, hr, modifiers, Math.floor(elapsed / T));
+      const gain = smooth(elapsed / (3 * T)),
+        electrical = smooth(elapsed / 30);
+      out = {
+        ...normal,
+        absolute: s.absolute,
+        t: s.t,
+        T: s.T,
+        motionTime: local,
+        motionPeriod: T,
+        pressures: Object.fromEntries(
+          Object.entries(normal.pressures).map(([k, v]) => [k, quiet(age)[k] * (1 - gain) + v * gain]),
+        ),
+        volume: {
+          lv: fill(age) * (1 - gain) + normal.volume.lv * gain,
+          rv: fill(age) * (1 - gain) + normal.volume.rv * gain,
+        },
+        sv: normal.sv * gain,
+        forwardSV: normal.forwardSV * gain,
+        ef: normal.ef * gain,
+        ecg: normal.ecg * electrical,
+        ap: normal.ap,
+        sounds: Object.fromEntries(Object.entries(normal.sounds).map(([k, v]) => [k, v * gain])),
+        conduction: { ...normal.conduction, rhythm: "sinus", absolute: s.absolute },
+        ectopy: out.ectopy,
+      };
+    }
+    return out;
+  }
+  function sample(t, hr, modifiers, beatIndex) {
+    return rhythmSample(baseSample(t, hr, modifiers, beatIndex), hr, modifiers);
+  }
+  function addRhythmEvent(type, rhythm, beat, t, hr) {
+    if (
+      !Number.isInteger(beat) ||
+      beat < 0 ||
+      !finite(hr, 40, 180) ||
+      !finite(t, 0, lengthOf(hr, beat)) ||
+      t >= lengthOf(hr, beat)
+    )
+      throw RangeError("Invalid rhythm event.");
+    t = Math.min(Math.max(t, MIN_CUT_MS), lengthOf(hr, beat) - 1e-6);
+    if (events.length >= D.maxEvents) return { outcome: "disabled", reason: "event-limit" };
+    const absolute = (describe(hr, beat)?.start ?? beat * host.sinusDuration(hr, beat)) + t;
+    if (events.some((e) => e.hr === hr && eventTime(e) >= absolute))
+      return { outcome: "disabled", reason: "past-event" };
+    events.push({ type, rhythm, beat, cutMs: t, hr, site: D.site, blocks: "next" });
+    bump();
+    return {
+      outcome: type === "shock" ? "shock" : "vf",
+      beat,
+      tMs: t,
+      pauseMs: type === "shock" ? SHOCK_PAUSE_MS : undefined,
+    };
   }
   function schedule(hr, beatIndex) {
     const desc = describe(hr, beatIndex);
@@ -785,13 +976,22 @@ export function createEctopy(host) {
     if (prev?.kind === "pvc") return { since: prev.lengthMs - pvcParams(prev, hr, {}).timing.qrsStart + t, timing };
     return { since: modulo(t - timing.qrsStart, T), timing };
   }
-  function stimulate(beatIndex, t, hr, modifiers = {}) {
+  function stimulate(beatIndex, t, hr, modifiers = {}, options = {}) {
     if (!Number.isInteger(beatIndex) || beatIndex < 0) throw RangeError("Invalid stimulus beat.");
     if (!finite(hr, 40, 180)) throw RangeError("Invalid stimulus rate.");
     if (disabled) return { outcome: "disabled", reason: disabled };
-    if (api.rhythm !== "sinus") return { outcome: "disabled", reason: "rhythm" };
+    if (rhythmAt(beatIndex, t, hr) !== "sinus") return { outcome: "disabled", reason: "rhythm" };
     const desc = describe(hr, beatIndex) ?? sinusDesc(hr, beatIndex);
     if (!finite(t, 0, desc.lengthMs) || t >= desc.lengthMs) throw RangeError("Stimulus outside the beat.");
+    t = Math.min(Math.max(t, MIN_CUT_MS), desc.lengthMs - 1e-6);
+    const tPeak =
+      desc.kind === "pvc" ? pvcParams(desc, hr, modifiers).timing : host.timingFor(desc.T, host.scheduleFor(desc.T));
+    const electricalPeriod = desc.kind === "pvc" ? desc.lengthMs : desc.T;
+    if (
+      options.vulnerable &&
+      Math.abs(modulo(t - tPeak.qrsStart, electricalPeriod) - (tPeak.qtMs * 320) / 380) <= 20 + 1e-9
+    )
+      return addRhythmEvent("stimulus", "vf", beatIndex, t, hr);
     const erpMs = (T) => phys.ventricularErpMs * Math.sqrt(T / baseline.periodMs);
     if (desc.kind === "pvc") {
       const since = t - pvcParams(desc, hr, {}).timing.qrsStart;
@@ -805,10 +1005,10 @@ export function createEctopy(host) {
     const blocks = t < timing.qrsStart ? "own" : "next";
     // A new stimulus replaces any later plan (the clock never goes back in a
     // lesson; a replay restores its own plan).
-    events = events.filter((e) => !(e.hr === hr && e.beat >= beatIndex));
+    if (events.length >= D.maxEvents) return { outcome: "disabled", reason: "event-limit" };
+    events = events.filter((e) => !(e.hr === hr && (e.beat > beatIndex || (e.beat === beatIndex && e.cutMs >= t))));
     events.push({ type: "stimulus", rhythm: "sinus", beat: beatIndex, cutMs: t, hr, site: D.site, blocks });
     events.sort((a, b) => a.beat - b.beat);
-    if (events.length > D.maxEvents) events = events.slice(-D.maxEvents);
     bump();
     const pvc = describe(hr, beatIndex + 1),
       p = pvcParams(pvc, hr, modifiers);
@@ -827,7 +1027,23 @@ export function createEctopy(host) {
     };
   }
   const api = {
-    rhythm: "sinus",
+    get rhythm() {
+      return events.at(-1)?.rhythm ?? (patch.vf ? "vf" : "sinus");
+    },
+    rhythmAt,
+    vulnerablePeak(beat, hr) {
+      const desc = describe(hr, beat),
+        T = desc?.T ?? host.sinusDuration(hr, beat),
+        tm = desc?.kind === "pvc" ? pvcParams(desc, hr, {}).timing : host.timingFor(T, host.scheduleFor(T));
+      return modulo(tm.qrsStart + (tm.qtMs * 320) / 380, desc?.kind === "pvc" ? desc.lengthMs : T);
+    },
+    fibrillate(beat, t, hr) {
+      return addRhythmEvent("stimulus", "vf", beat, t, hr);
+    },
+    shock(beat, t, hr) {
+      if (rhythmAt(beat, t, hr) !== "vf") return { outcome: "not-advised", beat, tMs: t };
+      return addRhythmEvent("shock", "asystole", beat, t, hr);
+    },
     disabledReason: disabled,
     get version() {
       return version;
@@ -836,7 +1052,7 @@ export function createEctopy(host) {
       return events.map((e) => ({ ...e }));
     },
     get active() {
-      return events.length > 0;
+      return events.length > 0 || !!patch.vf;
     },
     stimulate,
     clear() {

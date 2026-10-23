@@ -142,6 +142,10 @@ export function ecg12Components(sample, spec) {
     st = [0, 0, 0],
     t = [0, 0, 0],
     fib = [0, 0, 0];
+  if (c.rhythm === "vf" || c.rhythm === "asystole") {
+    qrs[0] = sample.ecg * .45; qrs[1] = sample.ecg; qrs[2] = sample.ecg * -.3;
+    return { p, qrs, st, t, fib };
+  }
   const x = c.ventricularTime; // ms since QRS onset, within this beat
   // CC-59: a premature ventricular beat (engine/ectopy.js) has its own waves.
   const v = c.ectopic && spec.ectopic ? spec.ectopic : spec;

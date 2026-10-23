@@ -202,12 +202,12 @@ export function conduction2dState(conduction, s = {}) {
       : null,
     sa: {
       position: locate(SA, s),
-      alpha: c.fibrillating ? 0 : pulse(atrialAge),
+      alpha: c.fibrillating || c.rhythm === "vf" || c.rhythm === "asystole" ? 0 : pulse(atrialAge),
     },
     av: {
       position: locate(AV, s),
       alpha:
-        c.dissociated || c.fibrillating
+        c.dissociated || c.fibrillating || c.rhythm === "vf" || c.rhythm === "asystole"
           ? 0
           : c.avDelay
             ? 0.75
@@ -250,7 +250,9 @@ export function conduction2dState(conduction, s = {}) {
                   6,
             ),
           ],
-          alpha: suppressed
+          alpha: c.rhythm === "vf"
+            ? (r.clock === "ventricular" ? Math.max(0, Math.sin((c.absolute ?? 0) * .037 + i * 2.3 + r.start)) ** 8 : 0)
+            : c.rhythm === "asystole" || suppressed
             ? 0
             : pulse(
                 age - (r.start + ((r.end - r.start) * i) / (points.length - 1)),

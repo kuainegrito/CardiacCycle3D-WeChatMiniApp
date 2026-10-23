@@ -100,8 +100,13 @@
         <view class="ecg-tab {{ecgTab === 'rhythm' ? 'on' : ''}}" data-tab="rhythm" bindtap="setEcgTab">{{t.tabRhythm}}</view>
       </view>
       <!-- CC-60: the ectopic stimulus (website CC-58) -->
-      <view class="stimulus-row"><view class="stimulus-button {{stimulusDisabled ? 'off' : ''}}" bindtap="stimulate">{{t.ectopicStimulus}}</view></view>
-      <view wx:if="{{ectopyText}}" class="ectopy-result {{ectopyOutcome}}">{{ectopyText}}</view>
+      <view class="stimulus-row"><view class="stimulus-button {{stimulusDisabled ? 'off' : ''}}" bindtap="stimulate">{{t.ectopicStimulus}}</view>
+        <!-- CC-64: the vulnerable-period switch, the AED and (when advised) the shock -->
+        <view class="loop vulnerable" bindtap="toggleVulnerable"><view class="check {{vulnerable ? 'on' : ''}}">✓</view><text>{{t.aedVulnerable}}</text></view>
+        <view class="stimulus-button {{aedStatus === 'analyzing' ? 'off' : ''}}" bindtap="analyzeAed">{{aedStatus === 'analyzing' ? t.aedAnalyzing : t.aedButton}}</view>
+        <view wx:if="{{aedStatus === 'advised'}}" class="stimulus-button shock" bindtap="deliverShock">{{t.aedShock}}</view></view>
+      <view wx:if="{{aedText}}" class="ectopy-result aed {{aedStatus}}">{{aedText}}</view>
+      <view wx:if="{{ectopyText && aedStatus === 'idle'}}" class="ectopy-result {{ectopyOutcome}}">{{ectopyText}}</view>
       <canvas wx:if="{{ecgTab === 'wiggers'}}" type="2d" id="strips" class="strips-canvas chart-canvas" bindtouchstart="stripStart" bindtouchmove="stripMove" bindtouchend="stripEnd" bindtouchcancel="stripCancel"></canvas>
       <block wx:if="{{ecgTab === 'chest'}}">
         <view class="chest-modes">

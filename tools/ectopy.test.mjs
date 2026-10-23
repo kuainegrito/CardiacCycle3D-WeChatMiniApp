@@ -105,6 +105,9 @@ test("the copied modules, labels and chest-lead entry are the website's", { skip
   assert.equal(view.split("\n").slice(2).join("\n"), source);
   assert.deepEqual(ectopyLabels, JSON.parse(await readFile(join(web, "content/ectopy/labels.json"), "utf8")));
   assert.deepEqual(ecg12.ectopic, JSON.parse(await readFile(join(web, "content/ecg12/ectopic.json"), "utf8")));
+  // CC-61 / CC-64: the Loop-off rule and the fibrillation wall jitter.
+  for (const file of ["beats.js", "vf-view.js"]) assert.equal(await own(file), await readFile(join(web, "js", file), "utf8"), file);
+  assert.ok(scenarios.some((x) => x.id === "vf"), "the VF scenario is synced");
 });
 
 test("the help text explains the stimulus and has no quiz pointer (no quiz here)", () => {
@@ -226,4 +229,89 @@ test("CC-61 R1: with Loop off the premature beat, the pause and the post-pause b
   const b = plain.clock.beatIndex;
   for (let i = 0; i < 500 && plain.clock.playing; i++) frame(plain);
   assert.equal(plain.clock.beatIndex, b);
+});
+
+// CC-64 (website js/aed.js): the vulnerable period, the AED and the shock.
+test("CC-64: a stimulus at the T-wave peak with the vulnerable switch on starts VF; the AED advises and the shock restores sinus rhythm", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { page } = await open("normal");
+  assert.equal(page.data.vulnerable, false, "off by default");
+  // Off: a stimulus at the peak is an ordinary premature beat.
+  const peak = (p) => p.model.ectopy.vulnerablePeak(p.clock.beatIndex, p.clock.hr);
+  page.clock.playing = false;
+  page.clock.seek(peak(page));
+  page.stimulate();
+  assert.equal(page.data.ectopyOutcome, "pvc");
+  // In sinus rhythm the AED does not advise a shock.
+  page.analyzeAed();
+  assert.equal(page.data.aedStatus, "analyzing");
+  assert.equal(page.data.ecgTab, "rhythm");
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "notAdvised");
+  assert.match(page.data.aedText, /不建议电击/);
+  // On, at the peak of a later beat: fibrillation.
+  page.onHR({ detail: { value: 75 } }); // a clean plan (and the switch back off)
+  assert.equal(page.data.aedStatus, "idle");
+  page.toggleVulnerable();
+  assert.equal(page.data.vulnerable, true);
+  page.clock.playing = false;
+  page.clock.seek(peak(page));
+  page.stimulate();
+  assert.equal(page.data.ectopyOutcome, "vf");
+  assert.match(page.data.ectopyText, /心室颤动/);
+  assert.equal(page.model.ectopy.rhythmAt(page.clock.beatIndex, page.clock.t + 50, page.clock.hr), "vf");
+  play(page, 1200);
+  assert.equal(page.sample.conduction.rhythm, "vf");
+  assert.equal(page.beatTypeText(page.sample), "心室颤动");
+  // No shock button until the analysis advises one.
+  page.deliverShock();
+  assert.equal(page.model.ectopy.events.filter((e) => e.type === "shock").length, 0);
+  page.analyzeAed();
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "advised");
+  page.deliverShock();
+  assert.equal(page.data.aedStatus, "shock");
+  assert.match(page.data.aedText, /首次电击即成功/);
+  assert.match(page.data.aedText, /不是 AED 操作培训/);
+  play(page, 400);
+  assert.equal(page.sample.conduction.rhythm, "asystole");
+  play(page, 3200); // the 1.5 s pause at speed 0.5, then sinus
+  assert.equal(page.sample.conduction.rhythm, "sinus");
+});
+
+test("CC-64: a scenario change during the analysis cancels it; the VF scenario says so and is advised a shock", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { page } = await open("normal");
+  page.analyzeAed();
+  page.onScenario({ detail: { value: scenarios.findIndex((s) => s.id === "vf") } });
+  assert.equal(page.data.aedStatus, "idle");
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "idle", "the old analysis does not come back");
+  assert.match(page.data.ectopyText, /心室颤动：心室无有效输出/);
+  page.analyzeAed();
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "advised");
+});
+
+// Website CC-61 freeze fix: a stimulus at t = 0 (a paused cursor at the
+// beat start) used to cut a zero-length beat; the rhythm strip drew the rest
+// of the old beat over the premature one.
+test("CC-61: a stimulus at t = 0 plays on, and the strip's shortened beat ends at the stimulus", async () => {
+  const { page } = await open("normal");
+  page.clock.playing = false;
+  page.clock.seek(0);
+  const k = page.clock.beatIndex;
+  page.stimulate();
+  assert.equal(page.data.ectopyOutcome, "pvc");
+  assert.ok(page.model.cycleDuration(page.clock.hr, k) >= 1, "no zero-length beat");
+  page.clock.lastNow = now;
+  for (let i = 0; i < 400 && page.clock.beatIndex < k + 2; i++) frame(page);
+  assert.ok(page.clock.beatIndex >= k + 2, "the clock runs on through the premature beat");
+  // A later stimulus: the strip keeps the shortened beat only up to it.
+  pauseAt(page, 0.45);
+  const b = page.clock.beatIndex, c = page.clock.t;
+  page.stimulate();
+  const beat = page.rhythm.beats.get(b);
+  assert.ok(Math.abs(beat.T - c) < 1e-6);
+  assert.ok(beat.rows.at(-1).t <= c + 1e-6 && beat.rows.every((r) => r.t <= c + 1e-6), "no rows past the stimulus");
 });

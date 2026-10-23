@@ -47,7 +47,7 @@ const caches = new WeakMap();
 function integrals(model, hr, modifiers, beatIndex, atrialSettings) {
   let cache = caches.get(model);
   if (!cache) caches.set(model, (cache = new Map()));
-  const key = `${hr}|${modifiers.preload ?? 1}|${modifiers.afterload ?? 1}|${modifiers.contractility ?? 1}|${varies(model) ? beatIndex : 0}`;
+  const key = `${hr}|${modifiers.preload ?? 1}|${modifiers.afterload ?? 1}|${modifiers.contractility ?? 1}|${varies(model) ? beatIndex : 0}|${model.ectopy?.version ?? 0}`;
   let table = cache.get(key);
   if (!table) {
     if (cache.size > 8) cache.clear();

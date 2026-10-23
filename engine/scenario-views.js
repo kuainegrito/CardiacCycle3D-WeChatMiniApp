@@ -21,6 +21,7 @@ export const SCENARIO_VIEWS = Object.freeze({
   vagal: { preset: "filling", wallOpacity: 0.2, camera: "echo" },
   // Node and branch blocks and the other rhythm disorders: the activation wave.
   af: { preset: "conduction", wallOpacity: 0.35, camera: "anterior" },
+  vf: { preset: "conduction", wallOpacity: 0.35, camera: "anterior" },
   "first-degree": { preset: "conduction", wallOpacity: 0.35, camera: "anterior" },
   "complete-block": { preset: "conduction", wallOpacity: 0.35, camera: "anterior" },
   lbbb: { preset: "conduction", wallOpacity: 0.35, camera: "anterior" },

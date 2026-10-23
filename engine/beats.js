@@ -118,8 +118,13 @@ export function keepBeatSamples(model) {
 /**
  * CC-61 R1: true while beat beatIndex is a stimulus's shortened beat (k) or
  * its premature beat (k + 1), so that a clock with Loop off runs on through
- * them and stops at the end of the post-pause beat (k + 2).
+ * them and stops at the end of the post-pause beat (k + 2). Premature beats
+ * only: CC-63's fibrillation and shock events (rhythm "vf", "asystole") are
+ * rhythm changes, not a beat plan with a pause.
  */
 export function ectopicRunOn(model, beatIndex, hr) {
-  return !!model?.ectopy?.active && model.ectopy.events.some((e) => e.hr === hr && e.beat <= beatIndex && beatIndex <= e.beat + 1);
+  return (
+    !!model?.ectopy?.active &&
+    model.ectopy.events.some((e) => e.rhythm === "sinus" && e.hr === hr && e.beat <= beatIndex && beatIndex <= e.beat + 1)
+  );
 }

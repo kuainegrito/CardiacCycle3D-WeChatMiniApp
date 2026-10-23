@@ -187,7 +187,7 @@ export class RhythmStrip {
   rWaves(beats) {
     // (A beat cut in its PR interval never reaches its own QRS.)
     return beats
-      .filter(([, beat]) => beat.qrs < beat.T)
+      .filter(([, beat]) => beat.qrs < beat.T && !["vf", "asystole"].includes(beat.series.find(s => s.t >= beat.qrs)?.conduction?.rhythm))
       .map(([k, beat, s]) => ({ k, beat, x: s + beat.qrs }))
       .filter((r) => r.x <= 0);
   }
@@ -247,7 +247,7 @@ export class RhythmStrip {
         }
       }
       // (A beat cut in its PR interval never reaches its own QRS.)
-      if (beat.qrs >= beat.T) continue;
+      if (beat.qrs >= beat.T || ["vf", "asystole"].includes(beat.series.find(p => p.t >= beat.qrs)?.conduction?.rhythm)) continue;
       const r = s + beat.qrs,
         x0 = Math.max(g.x, X(r)),
         x1 = Math.min(g.x + g.pw, X(Math.min(0, r + beat.erp)));
@@ -279,7 +279,7 @@ export class RhythmStrip {
       ctx.restore();
     };
     trace({ y0: g.ecg.y0, h: g.ecg.h }, "ecg", -(g.ecg.h - (ecgMid - g.ecg.y0)) / mvpx, (ecgMid - g.ecg.y0) / mvpx, C.ecg);
-    trace(g.ao, "ao", 40, 135, C.ao);
+    trace(g.ao, "ao", 0, 135, C.ao);
     trace(g.lv, "lv", 30, 145, C.volume);
     // Row labels and scales.
     const small = g.compact ? 9 : 10;
@@ -337,7 +337,7 @@ export class RhythmStrip {
     const start = new Map(beats.map(([k, , s]) => [k, s]));
     for (const e of this.model?.ectopy?.events ?? []) {
       const s = start.get(e.beat);
-      if (s !== undefined && inside(s + e.cutMs)) bolt(ctx, X(s + e.cutMs), g.ecg.y0 + 24, 7.5, true);
+      if (s !== undefined && inside(s + e.cutMs)) bolt(ctx, X(s + e.cutMs), g.ecg.y0 + 24, e.type === "shock" ? 11 : 7.5, true);
     }
     for (const e of this.refractory) {
       const s = start.get(e.beat);

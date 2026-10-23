@@ -153,6 +153,7 @@ function gridSamples(model, hr, modifiers, beatIndex, n) {
   const g = lastGrid;
   if (
     g?.model === model &&
+    g.version === (model.ectopy?.version ?? 0) &&
     g.hr === hr &&
     g.beatIndex === beatIndex &&
     g.n === n &&
@@ -168,7 +169,7 @@ function gridSamples(model, hr, modifiers, beatIndex, n) {
       model.sample(Math.min(T - 0.001, (i * T) / n), hr, modifiers, beatIndex),
     );
   const { preload, afterload, contractility } = modifiers;
-  lastGrid = { model, hr, beatIndex, n, preload, afterload, contractility, samples };
+  lastGrid = { model, hr, beatIndex, n, preload, afterload, contractility, samples, version: model.ectopy?.version ?? 0 };
   return samples;
 }
 

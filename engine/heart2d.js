@@ -1,5 +1,6 @@
 // Copied by tools/sync-from-web.mjs from js/heart2d.js; only this line is added (and any stylesheet import removed).
 import { document } from "./mp-dom.js";
+import { vfOffset } from './vf-view.js';
 import { Conduction2D } from "./heart2d-conduction.js";
 // CC-30: the 2D heart. An original frontal-section drawing in the style of the
 // classic textbook animation the owner sent (a GIF of unknown licence: nothing
@@ -421,8 +422,14 @@ export function heart2dGeometry({
   stenosis = null,
   interatrial = null,
   filling = null,
+  vfTime = null,
 }) {
-  const at = (point) => place(point, s);
+  const at = (point) => {
+    const xy = place(point, s);
+    if (vfTime === null || xy[1] < 450) return xy;
+    const jitter = vfOffset(xy[0], xy[1], vfTime, 1.7);
+    return xy.map((v,i) => v+jitter[i]);
+  };
   const muscles = Object.fromEntries(
     Object.entries(MUSCLES).map(([id, m]) => {
       const k = s[m.driver];
@@ -1625,6 +1632,8 @@ export class Heart2DView {
       ...frame,
       atrialSettings: this.atrialSettings,
     });
+    this.state.vfTime = frame.sample?.conduction?.rhythm === "vf" ? frame.sample.absolute : null;
+    this.svg.dataset.rhythm = frame.sample?.conduction?.rhythm ?? "sinus";
     const g = (this.geometry = heart2dGeometry(this.state));
     this.conductionView.update(frame.sample?.conduction, this.state.s, g.shell);
     this.shell.setAttribute("d", g.shell);

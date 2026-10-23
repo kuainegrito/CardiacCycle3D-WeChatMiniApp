@@ -175,6 +175,8 @@ const TEXT_KEYS = [
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
   "tabWiggers", "tabChest", "chestModeSync", "chestModePaper", "chestFindings", "chestNote",
   "tabRhythm", "ectopicStimulus", "rhythmNote",
+  // CC-64 (website): the AED and the vulnerable-period switch.
+  "aedButton", "aedShock", "aedAnalyzing", "aedVulnerable",
   "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
 ];
 
@@ -240,6 +242,11 @@ Page({
     // stimulus: as on the website's phones) and its button.
     ectopyText: "",
     ectopyOutcome: "idle",
+    // CC-64: off by default; on, a stimulus within 20 ms of the T-wave peak
+    // starts ventricular fibrillation (engine ectopy.stimulate's vulnerable).
+    vulnerable: false,
+    aedStatus: "idle",
+    aedText: "",
     stimulusDisabled: false,
   },
 
@@ -311,6 +318,7 @@ Page({
   },
   onUnload() {
     this.plotResume?.cancel();
+    this.resetAed();
     this.visible = false;
     this.unloaded = true;
     this.audio?.destroy();
@@ -632,13 +640,21 @@ Page({
     const beat = clock.beatIndex, t = clock.t, paused = !clock.playing;
     let result;
     try {
-      result = model.ectopy.stimulate(beat, t, clock.hr, this.modifiers);
+      result = model.ectopy.stimulate(beat, t, clock.hr, this.modifiers, { vulnerable: this.data.vulnerable });
     } catch (error) {
       console.warn("Stimulus not applied:", error);
       return;
     }
     const notes = [];
-    if (result.outcome === "pvc") {
+    if (result.outcome === "pvc" || result.outcome === "vf") this.resetAed();
+    if (result.outcome === "vf") {
+      // CC-63: fibrillation from this instant (a rhythm event, no premature
+      // beat to prepare): rebuild at once and drop what was prepared.
+      this.nextBeat = null;
+      model.shareBeat?.(null);
+      if (this.atlas) this.atlas.stateKey = undefined;
+      this.rebuild();
+    } else if (result.outcome === "pvc") {
       // This beat ends here and the next ones are new: drop what was prepared
       // for the old plan and hold the clock while the premature beat is
       // prepared (holding; CC-61). Up to the stimulus this beat is unchanged,
@@ -646,7 +662,12 @@ Page({
       this.nextBeat = null;
       model.shareBeat?.(null);
       this.stimulusHold = { model, beat: result.pvcBeat };
-      this.recordRhythmBeat();
+      // The rhythm strip gets this beat's traces up to the stimulus only (and the
+      // sample at it); the whole series drew the rest of the old beat over the
+      // premature one (website CC-61 cutSeries).
+      const cut = this.series.filter((s) => s.t < result.tMs);
+      cut.push(model.sample(result.tMs, clock.hr, this.modifiers, beat));
+      this.rhythmStrip().setBeat({ model, series: cut, beatIndex: beat, hr: clock.hr, modifiers: this.modifiers, T: model.cycleDuration(clock.hr, beat) });
     } else if (result.outcome === "refractory") this.rhythmStrip().addRefractory(beat, t);
     const responded = result.outcome !== "disabled" || result.reason === "one-per-cycle";
     if (responded && paused) {
@@ -668,6 +689,8 @@ Page({
   // fresh model, so no per-model beat table of the old plan is reused.
   resetEctopy() {
     this.stimulusHold = null;
+    this.resetAed();
+    if (this.data.vulnerable) this.setData({ vulnerable: false });
     if (this.model.ectopy.active) {
       const scenario = this.model.scenario;
       this.model.shareBeat?.(null);
@@ -688,13 +711,16 @@ Page({
     if (reason) {
       text = t({ "atrial-fibrillation": "ectopyDisabledAf", "complete-block": "ectopyDisabledBlock" }[reason] ?? "ectopyDisabledOther");
       outcome = "disabled";
-    } else if (this.ectopyResult) {
+    } else if (!this.ectopyResult && this.model.patch?.vf) text = t("aedVf");
+    else if (this.ectopyResult) {
       const { result: r, summary: s, notes } = this.ectopyResult;
       outcome = r.outcome;
-      if (r.outcome === "pvc")
+      if (r.outcome === "vf") text = t("aedVf") + " " + t("aedDisclaimer");
+      else if (r.outcome === "pvc")
         text = fill(t("ectopyPvc"), { t: Math.round(r.tMs), pre: seconds(s.preMs), post: seconds(s.postMs), sum: seconds(s.sumMs), rr: seconds(s.rrMs), sv: Math.round(s.svMl), svPost: Math.round(s.postSvMl) }) +
           (s.ejected ? "" : t("ectopyNoPulse")) + (s.onT ? t("ectopyRonT") : "");
       else if (r.outcome === "refractory") text = fill(t("ectopyRefractory"), { t: Math.round(r.tMs), erp: Math.round(r.erpMs) });
+      else if (r.reason === "rhythm") text = t("aedVf");
       else text = fill(t("ectopyOnePerCycle"), { t: Math.round(r.tMs) });
       text += notes.map(t).join("");
     }
@@ -702,8 +728,66 @@ Page({
   },
   beatTypeText(s) {
     const kind = s.ectopy?.kind;
+    if (kind === "vf" || kind === "asystole") return i18n.t(kind === "vf" ? "beatVf" : "beatAsystole");
     if (kind === "pvc") return i18n.t("beatPvc").replace("{t}", Math.round(s.ectopy.stimulusMs));
     return i18n.t(kind === "post" ? "beatPost" : "beatSinus");
+  },
+  // ---- CC-64: the AED (website js/aed.js) ----------------------------------
+  // idle → analyzing → advised / notAdvised → shock. The analysis takes 2 s of
+  // wall time while the traces play on; the model's rhythm is read again when
+  // it ends and once more at the shock itself, so an old advice never shocks.
+  // A scenario, rate or loading change (resetEctopy) or a new stimulus cancels it.
+  toggleVulnerable() {
+    this.setData({ vulnerable: !this.data.vulnerable });
+  },
+  analyzeAed() {
+    if (this.aed?.status === "analyzing") return;
+    const { model, clock } = this,
+      token = (this.aedToken = {}),
+      version = model.ectopy.version;
+    this.aed = { status: "analyzing" };
+    if (this.data.ecgTab !== "rhythm") this.setEcgTab({ currentTarget: { dataset: { tab: "rhythm" } } });
+    clock.playing = true;
+    clock.lastNow = null;
+    this.renderAed();
+    clearTimeout(this.aedTimer);
+    this.aedTimer = setTimeout(() => {
+      const now = this.model;
+      if (token !== this.aedToken || now !== model || now.ectopy.version !== version) return this.resetAed();
+      const c = this.clock;
+      this.aed = { status: now.ectopy.rhythmAt(c.beatIndex, c.t, c.hr) === "vf" ? "advised" : "notAdvised" };
+      this.renderAed();
+    }, 2000);
+  },
+  deliverShock() {
+    if (this.aed?.status !== "advised") return;
+    const { model, clock } = this,
+      result = model.ectopy.shock(clock.beatIndex, clock.t, clock.hr);
+    this.aed = { status: result.outcome === "shock" ? "shock" : "notAdvised" };
+    if (result.outcome === "shock") {
+      this.nextBeat = null;
+      model.shareBeat?.(null);
+      if (this.atlas) this.atlas.stateKey = undefined;
+      this.rebuild();
+      clock.playing = true;
+      clock.lastNow = null;
+      if (this.data.ecgTab !== "rhythm") this.setEcgTab({ currentTarget: { dataset: { tab: "rhythm" } } });
+    }
+    this.renderAed();
+    this.update(true);
+  },
+  resetAed() {
+    this.aedToken = null;
+    clearTimeout(this.aedTimer);
+    this.aedTimer = null;
+    this.aed = null;
+    this.renderAed();
+  },
+  renderAed() {
+    const status = this.aed?.status ?? "idle",
+      key = { analyzing: "aedAnalyzing", advised: "aedAdvised", notAdvised: "aedNotAdvised", shock: "aedSuccess" }[status];
+    const aedText = key ? i18n.t(key) + " " + i18n.t("aedDisclaimer") : "";
+    if (aedText !== this.data.aedText || status !== this.data.aedStatus) this.setData({ aedStatus: status, aedText });
   },
   setChestMode(e) {
     const mode = e.currentTarget.dataset.mode;
