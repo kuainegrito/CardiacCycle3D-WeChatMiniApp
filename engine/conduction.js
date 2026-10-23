@@ -15,6 +15,17 @@ export function conductionTiming(baseline,patch,T,atrialEnd) {
  return {qrsStart,rapidQrsStart,prMs:patch.completeBlock?null:pr,saStart,qrsDuration,qtMs:380*rateScale+accessoryAdvance*qrsScale,rateScale,branchDelay,atrialScale,qrsScale,baseQrs,activationOrigin:160-accessoryAdvance,
   atrialPeriod,accessoryStart:patch.accessoryPathway?qrsStart:null};
 }
+/**
+ * CC-57: the timing of a premature ventricular beat (engine/ectopy.js) from
+ * the sinus timing of its cycle. The ventricles are excited latencyMs after
+ * the stimulus from an ectopic site, with a wide QRS; the atrial clock (SA
+ * start, atrial period and scale) stays the sinus one, so P waves keep coming.
+ */
+export function ectopicTiming(sinus,{latencyMs,qrsMs,normalQrsMs,site}) {
+ const qrsDuration=qrsMs*sinus.qrsScale;
+ return {...sinus,qrsStart:latencyMs,rapidQrsStart:latencyMs,prMs:null,qrsDuration,baseQrs:qrsMs,branchDelay:0,
+  qtMs:380*sinus.rateScale+(qrsMs-normalQrsMs)*sinus.qrsScale,activationOrigin:160,accessoryStart:null,ectopic:true,site};
+}
 /** Bake this scalar into the mesh's aActivation attribute. x is normalized anatomical space. */
 export function activationAt(position,chamber='lv',patch={}) {
  const p=Array.isArray(position)?{x:position[0],y:position[1],z:position[2]}:position;
@@ -44,7 +55,7 @@ export function sampleConduction(t,T,timing,patch={},absoluteTime=t) {
   dissociated:!!patch.completeBlock,fibrillating:!!patch.atrialFibrillation,block:patch.block??null,leftDelay:patch.block==='left'?(patch.branchDelayMs??70):0,rightDelay:patch.block==='right'?(patch.branchDelayMs??60):0,
   accessory:!!patch.accessoryPathway,activationProgress:Math.min(1,ventricularTime/timing.qrsDuration),
   repolarizing:ventricularTime>200*timing.rateScale&&ventricularTime<timing.qtMs,
-  repolarizationDirection:'epicardium → endocardium',rateScale:timing.rateScale};
+  repolarizationDirection:'epicardium → endocardium',rateScale:timing.rateScale,...(timing.ectopic&&{ectopic:true,site:timing.site})};
 }
 /** Shader injection for a per-vertex SA-relative activation-time field in milliseconds. */
 export const conductionShader = {

@@ -126,7 +126,8 @@ test("read values lists V1–V6 and a scenario without a chest-lead key finding 
 });
 
 // The copied modules must be the website's (tools/sync-from-web.mjs).
-const web = "../../My_webpage/cycling-metabolism_simulator/apps/cardiac_cycle";
+// CARDIAC_WEB: another website checkout (e.g. a branch's worktree), as the sync tools' argument.
+const web = process.env.CARDIAC_WEB ?? "../../My_webpage/cycling-metabolism_simulator/apps/cardiac_cycle";
 test("chest-lead modules match the website", { skip: !existsSync(web) && "website checkout not beside this repo" }, async () => {
   for (const file of ["ecg12.js", "ecg12-modifiers.js"])
     assert.equal(await readFile(join("engine", file), "utf8"), await readFile(join(web, "js", file), "utf8"), file);

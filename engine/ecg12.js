@@ -53,9 +53,12 @@ const finish = (c) => ({ ...c, dir: norm(c.dir) });
 /**
  * Build the frozen dipole spec of one scenario from its content/ecg12 entry.
  * Throws when a QRS window would outlast the engine's QRS duration, so a new
- * modifier cannot silently draw activity after the J point.
+ * modifier cannot silently draw activity after the J point. CC-59: with the
+ * premature-beat entry (content/ecg12/ectopic.json) the spec also carries
+ * spec.ectopic, the QRS, ST and T of a premature ventricular beat; P stays the
+ * scenario's, since the sinus node keeps firing.
  */
-export function buildEcg12Spec(scenario, entry = {}, baseline) {
+export function buildEcg12Spec(scenario, entry = {}, baseline, ectopic = null) {
   const patch = scenario.patch ?? {};
   const s = normalDipoles();
   const modifiers = resolveModifiers(patch, entry.modifiers ?? []);
@@ -81,7 +84,27 @@ export function buildEcg12Spec(scenario, entry = {}, baseline) {
     st: Object.entries(s.st).map(([id, c]) => ({ id, ...finish(c) })),
     fib: s.fib ? finish(s.fib) : null,
   };
+  if (ectopic) spec.ectopic = ectopicSpec(scenario, ectopic);
   return deepFreeze(clone(spec));
+}
+function ectopicSpec(scenario, entry) {
+  const s = normalDipoles(),
+    modifiers = resolveModifiers({}, entry.modifiers ?? []);
+  for (const m of modifiers) MODIFIERS[m.id].apply(s, m, {});
+  const baseQrs = modifiers.find((m) => m.qrsMs)?.qrsMs ?? 140;
+  const qrs = Object.entries(s.qrs).map(([id, c]) => ({ id, ...finish(c) }));
+  for (const c of qrs)
+    if (c.from < 0 || c.to > baseQrs + 1e-9 || c.to <= c.from)
+      throw new Error(
+        `${scenario.id}: premature-beat QRS dipole ${c.id} [${c.from}, ${c.to}] ms outside 0–${baseQrs} ms`,
+      );
+  return {
+    baseQrs,
+    modifiers: modifiers.map(({ source, ...m }) => m),
+    qrs,
+    t: Object.entries(s.t).map(([id, c]) => ({ id, ...finish(c) })),
+    st: Object.entries(s.st).map(([id, c]) => ({ id, ...finish(c) })),
+  };
 }
 function deepFreeze(o) {
   for (const v of Object.values(o))
@@ -120,9 +143,11 @@ export function ecg12Components(sample, spec) {
     t = [0, 0, 0],
     fib = [0, 0, 0];
   const x = c.ventricularTime; // ms since QRS onset, within this beat
+  // CC-59: a premature ventricular beat (engine/ectopy.js) has its own waves.
+  const v = c.ectopic && spec.ectopic ? spec.ectopic : spec;
   if (x < c.qrsDuration) {
     const xb = x / c.qrsScale; // back to the rate-independent QRS timeline
-    for (const d of spec.qrs)
+    for (const d of v.qrs)
       add(
         qrs,
         d.dir,
@@ -131,13 +156,13 @@ export function ecg12Components(sample, spec) {
   }
   if (x < c.qtMs) {
     const u = x / c.qtMs;
-    for (const d of spec.t)
+    for (const d of v.t)
       add(
         t,
         d.dir,
         d.amp * pulse((u - d.from) / (d.to - d.from), d.peak, d.shape),
       );
-    for (const d of spec.st) {
+    for (const d of v.st) {
       const j = x - c.qrsDuration;
       if (j <= 0) continue;
       if (d.shape === "decay") {

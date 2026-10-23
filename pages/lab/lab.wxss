@@ -200,3 +200,11 @@
 .shunt-note { display: flex; align-items: flex-start; gap: 6px; padding: 6px 12px 2px; font-size: 10px; line-height: 14px; color: #94a5bf; }
 .shunt-note .key-dot { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; flex: none; background: #ffffff; box-shadow: 0 0 5px #8fb8e8; }
 .shunt-note.asd .key-dot { background: #ff8a70; box-shadow: 0 0 5px #ff8a70; }
+/* CC-60: the ectopic stimulus (website CC-58). */
+.stimulus-row { display: flex; justify-content: flex-end; margin: 0 16px 6px; }
+.stimulus-button { border: 1px solid #e8a33d; border-radius: 999px; background: rgba(232,163,61,0.12); color: #e9effa; font-size: 12px; font-weight: 600; padding: 5px 12px; }
+.stimulus-button.off { opacity: 0.45; }
+.ectopy-result { font-size: 11px; line-height: 16px; color: #94a5bf; padding: 0 16px 8px; }
+.ectopy-result.pvc { color: #e9effa; }
+.ectopy-result.refractory { color: #e8a33d; }
+.rhythm-strip { width: 100%; height: 380px; display: block; }

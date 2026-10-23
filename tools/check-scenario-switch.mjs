@@ -18,9 +18,11 @@ export async function load(url, context, next) {
   if (url.startsWith("file:") && url.endsWith(".json"))
     return { format: "module", source: "export default " + (await readFile(new URL(url), "utf8")), shortCircuit: true };
   if (url.startsWith("file:") && url.endsWith("/waveforms.js")) {
-    const head = "function sample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){";
+    // The sinus sample (website CC-57 renamed it sinusSample; sample() now
+    // dispatches to it, or to the ectopic beat plan, which builds on it).
     const source = await readFile(new URL(url), "utf8");
-    if (!source.includes(head)) throw Error("model sample() not found in " + url);
+    const head = ["function sinusSample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){", "function sample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){"].find((h) => source.includes(h));
+    if (!head) throw Error("model sample() not found in " + url);
     return { format: "module", source: source.replace(head, head + "globalThis.modelSamples++;"), shortCircuit: true };
   }
   return next(url, context);

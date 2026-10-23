@@ -105,7 +105,8 @@ export const MODIFIERS = {
     auto: (p) =>
       p.completeBlock && (p.escapeQrsMs ?? 0) >= 120 ? { origin: "rv" } : null,
     apply(s, m, p) {
-      const e = p.escapeQrsMs ?? 140,
+      // CC-59: a premature ventricular beat (content/ecg12/ectopic.json) gives its own width.
+      const e = m.qrsMs ?? p.escapeQrsMs ?? 140,
         rv = (m.origin ?? "rv") === "rv";
       // An RV focus activates the LV late (LBBB-like); an LV focus the reverse.
       s.qrs = {

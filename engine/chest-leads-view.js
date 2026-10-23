@@ -76,6 +76,7 @@ export class ChestLeadsView {
     this.mode = "paper"; // ECG paper by default (owner, 2026-10-20)
     this.highlight = new Set();
     this.beats = new Map(); // beatIndex → { T, rows }, for the paper window
+    this.ectopic = null; // CC-59: content/ecg12/ectopic.json while stimuli are on
     this.background = document.createElement("canvas");
   }
   /** entry: content/ecg12/<id>.json; spec: buildEcg12Spec(...) */
@@ -90,16 +91,18 @@ export class ChestLeadsView {
    * The lab's current beat: series as from model.series(); schedule from
    * model.phaseSchedule(); beatKey identifies the beat (0 for identical beats).
    */
-  setData({ series, schedule, beatIndex, sameBeat = false, hr, modifiers }) {
+  setData({ series, schedule, beatIndex, sameBeat = false, hr, modifiers, T: beatT }) {
     if (!this.spec || !series?.length) return;
     const stamp = `${hr}|${modifiers?.preload}|${modifiers?.afterload}|${modifiers?.contractility}`;
     if (stamp !== this.stamp) this.beats.clear();
     this.stamp = stamp;
     const beatKey = sameBeat ? 0 : beatIndex;
     Object.assign(this, { schedule, beatIndex, beatKey, hr, sameBeat });
-    const T = series[0].T;
+    // CC-58: the beat's own length when the lab gives it (a beat cut by an
+    // ectopic stimulus keeps its samples' template T).
+    const T = beatT ?? series[0].T;
     let beat = this.beats.get(beatKey);
-    if (!beat || beat.series !== series) {
+    if (!beat || beat.series !== series || beat.T !== T) {
       beat = { T, series, schedule, rows: beatLeads(series, this.spec) };
       this.beats.set(beatKey, beat);
       if (this.beats.size > 12)
@@ -457,9 +460,22 @@ export class ChestLeadsView {
       ["QT", `${Math.round(c.qtMs)} ms`],
     ];
   }
+  /**
+   * CC-59: list the premature beat's finding after the scenario's while the
+   * lab has ectopic stimuli (entry: content/ecg12/ectopic.json, or null).
+   */
+  setEctopic(entry, shown) {
+    const next = shown ? entry : null;
+    if (next === this.ectopic) return;
+    this.ectopic = next;
+    this.renderFindings();
+  }
+  findingList() {
+    return [...(this.entry?.findings ?? []), ...(this.ectopic?.findings ?? [])];
+  }
   /** The scenario's findings with their lead tags and highlight state. */
   findingItems() {
-    return (this.entry?.findings ?? []).map((f, index) => ({
+    return this.findingList().map((f, index) => ({
       index,
       id: f.id,
       tag:
@@ -498,7 +514,7 @@ export class ChestLeadsView {
   }
   /** Highlight a finding's leads (toggle); returns the leads now lit. */
   toggleFinding(index) {
-    const leads = this.entry?.findings[index]?.leads ?? [];
+    const leads = this.findingList()[index]?.leads ?? [];
     const same =
       leads.length === this.highlight.size &&
       leads.every((l) => this.highlight.has(l));

@@ -21,6 +21,8 @@ const ENGINE = [
   "valve-disease.js",
   "foramen-ovale.js",
   "atlas-valve-flow.js",
+  // CC-60: the ectopic stimulus beat plan (website CC-57); waveforms.js imports it.
+  "ectopy.js",
 ];
 // Modules that touch the DOM: [source, target, globals they use].
 const DOM_MODULES = [
@@ -28,6 +30,8 @@ const DOM_MODULES = [
   ["js/engine/charts.js", "charts.js", "document, devicePixelRatio"],
   // CC-55: the chest-lead (V1–V6) view; its stylesheet import is dropped.
   ["js/chest-leads-view.js", "chest-leads-view.js", "document, devicePixelRatio"],
+  // CC-60: the rhythm strip of the ectopic stimulus (website CC-58); its stylesheet import is dropped.
+  ["js/ectopy-view.js", "ectopy-view.js", "devicePixelRatio"],
 ];
 
 await mkdir("engine", { recursive: true });
@@ -35,7 +39,7 @@ for (const file of ENGINE)
   await writeFile(join("engine", file), await readFile(join(web, "js/engine", file)));
 // Plain modules from the web app's js/ folder, copied with their engine
 // import paths flattened (engine/ is one folder here).
-const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js", "ecg12.js", "ecg12-modifiers.js"];
+const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js", "ecg12.js", "ecg12-modifiers.js", "ectopy-sounds.js"];
 for (const file of PLAIN)
   await writeFile(join("engine", file), (await readFile(join(web, "js", file), "utf8")).replaceAll('from "./engine/', 'from "./'));
 for (const [source, target, globals] of DOM_MODULES) {
@@ -56,12 +60,22 @@ await save("baseline.js", await json("content/cycle.baseline.json"));
 const ids = await json("content/scenarios/index.json");
 await save("scenarios.js", await Promise.all(ids.map((id) => json(`content/scenarios/${id}.json`))));
 await save("atrial-volume.js", await json("content/atlas-atrial-volume.json"));
-await save("labels.js", { en: await json("content/labels.en.json"), zh: await json("content/labels.zh.json") });
+// The mini program has no quiz (README "与网站的差异"): the help text's
+// pointer to it is dropped here, so that every sync keeps it out
+// (removed by hand on 2026-10-20, then made part of the sync on 2026-10-23).
+const QUIZ_POINTER = { en: " A short quiz waits at the bottom of the page.", zh: "页面底部有小测，可检验理解。" };
+const labels = { en: await json("content/labels.en.json"), zh: await json("content/labels.zh.json") };
+for (const lang of ["en", "zh"]) labels[lang].helpText = labels[lang].helpText.replace(QUIZ_POINTER[lang], "");
+await save("labels.js", labels);
 await save("heart-labels.js", { en: await json("assets/heart-labels.en.json"), zh: await json("assets/heart-labels.zh.json") });
 // CC-55: chest-lead patterns (one per scenario; the website's coverage gate
 // guarantees each exists) and their interface labels.
 await save("ecg12.js", {
   entries: Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await json(`content/ecg12/${id}.json`)]))),
   labels: await json("content/ecg12/labels.json"),
+  // CC-60: the premature ventricular beat's chest leads (website CC-59).
+  ectopic: await json("content/ecg12/ectopic.json"),
 });
-console.log(`synced ${ENGINE.length + DOM_MODULES.length + PLAIN.length} engine files and 6 data modules`);
+// CC-60: the ectopic stimulus's interface text (website content/ectopy/labels.json).
+await save("ectopy.js", await json("content/ectopy/labels.json"));
+console.log(`synced ${ENGINE.length + DOM_MODULES.length + PLAIN.length} engine files and 7 data modules`);

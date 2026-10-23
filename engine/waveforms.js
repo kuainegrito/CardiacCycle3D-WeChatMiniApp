@@ -2,6 +2,7 @@ import {valveStates} from './valves.js';
 import {conductionTiming,sampleConduction} from './conduction.js';
 import {reducedFillingFraction} from './reduced-filling.js';
 import {valsalvaRise,asdRise,interatrialState} from './foramen-ovale.js';
+import {createEctopy} from './ectopy.js';
 export const clamp=(x,lo,hi)=>Math.max(lo,Math.min(hi,x));
 export const modulo=(x,T)=>((x%T)+T)%T;
 /** Periodic Catmull–Rom lookup, locally bounded to avoid overshooting flat volume limbs. */
@@ -14,8 +15,11 @@ export function lookup(table,t,period=table.periodMs??800){
 export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
  const patch=scenario.patch??{},ref=baseline.periodMs,phys=baseline.physiology;
  const lookupWave=(id,t)=>lookup(baseline.waveforms[id],t);
- const cycleDuration=(hr=scenario.hr??75,beatIndex=0)=>60000/clamp(hr,40,180)*(patch.rrSequence?.[modulo(beatIndex,patch.rrSequence.length)]??1);
- function phaseSchedule(hr=scenario.hr??75,beatIndex=0){return scheduleFor(cycleDuration(hr,beatIndex));}
+ // The sinus beat. With an ectopic beat plan (CC-57, ectopy.js) the public
+ // cycleDuration, phaseSchedule and sample below read the plan; without one
+ // they are these.
+ const sinusDuration=(hr=scenario.hr??75,beatIndex=0)=>60000/clamp(hr,40,180)*(patch.rrSequence?.[modulo(beatIndex,patch.rrSequence.length)]??1);
+ function sinusSchedule(hr=scenario.hr??75,beatIndex=0){return scheduleFor(sinusDuration(hr,beatIndex));}
  function scheduleFor(T){
   const s=Math.sqrt(T/ref),atrial=100*T/ref,relax=60*s;
   // Very short AF intervals can exceed the nominal HR slider rate. Preserve a
@@ -42,8 +46,8 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   else if(h.size>=512)h.clear();
   return h;
  }
- function mappedTime(t,hr,beatIndex,shared=false){const T=cycleDuration(hr,beatIndex),schedule=shared?remember(schedules,T,()=>scheduleFor(T)):phaseSchedule(hr,beatIndex),time=modulo(t,T);let index=schedule.findIndex(p=>time>=p.start&&time<p.end);if(index<0)index=0;const p=schedule[index],r=baseline.phases[index];return {referenceTime:r.start+(time-p.start)/(p.duration||1)*(r.end-r.start),phaseIndex:index,phase:p,T,t:time,schedule};}
- function absoluteBeatStart(hr,beatIndex){const seq=patch.rrSequence;if(!seq)return beatIndex*cycleDuration(hr,0);const rounds=Math.floor(beatIndex/seq.length),tail=modulo(beatIndex,seq.length);return 60000/clamp(hr,40,180)*(rounds*seq.reduce((a,b)=>a+b,0)+seq.slice(0,tail).reduce((a,b)=>a+b,0));}
+ function mappedTime(t,hr,beatIndex,shared=false){const T=sinusDuration(hr,beatIndex),schedule=shared?remember(schedules,T,()=>scheduleFor(T)):sinusSchedule(hr,beatIndex),time=modulo(t,T);let index=schedule.findIndex(p=>time>=p.start&&time<p.end);if(index<0)index=0;const p=schedule[index],r=baseline.phases[index];return {referenceTime:r.start+(time-p.start)/(p.duration||1)*(r.end-r.start),phaseIndex:index,phase:p,T,t:time,schedule};}
+ function absoluteBeatStart(hr,beatIndex){const seq=patch.rrSequence;if(!seq)return beatIndex*sinusDuration(hr,0);const rounds=Math.floor(beatIndex/seq.length),tail=modulo(beatIndex,seq.length);return 60000/clamp(hr,40,180)*(rounds*seq.reduce((a,b)=>a+b,0)+seq.slice(0,tail).reduce((a,b)=>a+b,0));}
  function pressureVolume(t,hr,modifiers,beatIndex,shared=false){
   const m=mappedTime(t,hr,beatIndex,shared),r=m.referenceTime;
   const timing=shared?remember(timings,m.T,()=>conductionTiming(baseline,patch,m.T,m.schedule[0].end)):conductionTiming(baseline,patch,m.T,m.schedule[0].end),absolute=absoluteBeatStart(hr,beatIndex)+m.t;
@@ -115,7 +119,7 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   if(asd){pressures.ra+=asd;pressures.rv+=asd;pressures.pa+=asd;}
   return {...m,pressures,volume:{lv:lvVolume,rv:lvVolume},edv,esv,sv,ef:sv/edv*100,forwardSV:sv*(1-(patch.regurgitantFraction??0)),timing,absolute,modifiers:{preload,afterload,contractility}};
  }
- function sample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){
+ function sinusSample(t,hr=scenario.hr??75,modifiers={},beatIndex=0){
   const state=pressureVolume(t,hr,modifiers,beatIndex),{referenceTime:r,T,t:time,timing}=state;
   const sinceRapid=modulo(time-timing.rapidQrsStart,T);
   const rapidDuration=timing.qrsDuration-(timing.rapidQrsStart-timing.qrsStart);
@@ -145,7 +149,13 @@ export function createModel(baseline,scenario={id:'normal',hr:75,patch:{}}){
   return {...state,ecg,ap,sounds,valves,...(interatrial&&{interatrial}),conduction,conductionTime:conduction.saRelative,scenarioId:scenario.id,erp:modulo(time-timing.qrsStart,T)<phys.ventricularErpMs*timing.rateScale,
    pv:{espvrSlope:2.2*(patch.contractility??1)*(modifiers.contractility??1),edpvrStiffness:.025,volumeIntercept:10},atrialKick:patch.atrialKick===0||patch.completeBlock?0:phys.atrialKickMl};
  }
- const model={baseline,scenario,patch,sample,cycleDuration,phaseSchedule,lookup:lookupWave,
+ const ectopy=createEctopy({baseline,patch,scenarioId:scenario.id,sinusDuration,scheduleFor,sinusSample,lookup:lookupWave,lookupTable:lookup,
+  pressureVolume:(t,hr,modifiers,beatIndex)=>pressureVolume(t,hr,modifiers,beatIndex,true),
+  timingFor:(T,schedule)=>remember(timings,T,()=>conductionTiming(baseline,patch,T,schedule[0].end))});
+ const cycleDuration=(hr=scenario.hr??75,beatIndex=0)=>ectopy.api.active?ectopy.lengthOf(hr,beatIndex):sinusDuration(hr,beatIndex);
+ const phaseSchedule=(hr=scenario.hr??75,beatIndex=0)=>ectopy.api.active?ectopy.schedule(hr,beatIndex):sinusSchedule(hr,beatIndex);
+ const sample=(t,hr=scenario.hr??75,modifiers={},beatIndex=0)=>ectopy.api.active?ectopy.sample(t,hr,modifiers,beatIndex):sinusSample(t,hr,modifiers,beatIndex);
+ const model={baseline,scenario,patch,sample,cycleDuration,phaseSchedule,lookup:lookupWave,ectopy:ectopy.api,
   series:(hr=scenario.hr??75,modifiers={},beatIndex=0,count=400)=>Array.from({length:count},(_,i)=>sample(cycleDuration(hr,beatIndex)*i/count,hr,modifiers,beatIndex))};
  return model;
 }

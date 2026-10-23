@@ -33,7 +33,11 @@
 
    模型文件名带哈希，网站重新部署后若模型变了，必须重跑这一步，否则小程序会下载旧地址而失败。
 
-   打包后用 `node tools/check-chord-insertions.mjs` 核对三维包的腱索与网站逐位相同（2026-10-14 起三维包直接使用网站的腱索模块，不再替换）。
+   打包后用 `node tools/check-chord-insertions.mjs` 核对三维包的腱索与网站逐位相同（2026-10-14 起三维包直接使用网站的腱索模块，不再替换）；`node tools/check-ectopy-bundle.mjs` 核对三维包里的期前收缩传导场（2026-10-23 起）。
+
+3. 网站的改动还在分支上、没有并入网站 `master` 时，把该分支的工作树路径传给两个脚本；比较「复制的模块与网站相同」的测试用环境变量 `CARDIAC_WEB` 指向同一路径，例如 `CARDIAC_WEB=<路径> node --test tools/*.test.mjs`（不设时用默认的网站目录）。
+
+同步时帮助文字里网站的小测提示句（「页面底部有小测，可检验理解。」及英文对应句）由 `tools/sync-from-web.mjs` 去掉，小程序没有小测（2026-10-20 曾手工删掉，2026-10-23 起改为每次同步自动去掉）。
 
 ## 编译与预览
 
@@ -85,9 +89,11 @@
 - 2026-10-20：加入小程序码图片 `assets/MiniApp_QRcode.jpg`（负责人提供，由 Kimi 提交）。
 - 2026-10-20：三维心脏载入后若 15 秒没有被触摸，显示一次性「拖动可旋转心脏」手势提示（动画手 + 胶囊文字，3 秒后消失；每次打开最多一次，先触摸心脏则不显示）。初版为 30 秒，同日按负责人指示改为 15 秒。初版由 Claude、15 秒调整由 Kimi（Moonshot AI）实施；未上传微信。
 - 2026-10-20：帮助窗口删去「页面底部有小测，可检验理解。」一句（英文对应句一并删除）。注意 `data/labels.js` 由 `tools/sync-from-web.mjs` 从网站 `content/` 生成，网站源文案未改，下次同步会带回这句；如需保留删除，应同时改网站源。由 Kimi（Moonshot AI）按负责人指示实施；未上传微信。
+- 2026-10-23（同步网站 CC-57…59，小程序 CC-60）：异位刺激。Wiggers 卡片新增「⚡ 异位刺激」按钮与第三个标签「节律条」：刺激落在心室有效不应期内无反应；之后出现一次室性期前收缩（宽 QRS、每搏量小，早的可以推不开主动脉瓣），随后完全代偿间歇（前后两个 RR 之和 = 两个窦性 RR）和间歇后增强的一拍；结果行写出这些数值，暂停时点按钮会在光标时刻施加并继续播放，第一次刺激自动切到节律条。节律条（最近 4 秒的Ⅱ导联、主动脉压、左室容积，标出刺激、不应期、RR 与「= 2 × RR」）、胸导联的期前形态与发现、二维心脏从右室起搏点出发的激动波与 ⚡、三维传导视图的异位激动场、期前收缩心音都直接用网站的代码。房颤、三度房室阻滞按钮禁用；切换情景、改心率或负荷时清空。帮助文字加了一段说明。网站来源：分支 `claude/cc57-ectopy-engine` 的 `2accc610`（尚未并入网站 `master`，网站也未部署）。由 Claude 按负责人指示实施；未上传微信。
 
 ## 与网站的差异
 
+- 异位刺激（2026-10-23）：没有快捷键 S、学习记录回放与 CSV 导出（小程序本来就没有这些）；刺激前不显示提示行（与网站手机版相同），按钮禁用时显示原因。
 - 去掉了顶部标题与介绍、小测、临床联系、解剖结构选择栏（含色觉友好开关）、外链和行为统计；作者信息（姓名、邮箱、个人网站，点按复制）只在「?」帮助窗口底部。
 - 「真实心脏」改称「三维心脏」；默认三维心脏（2026-10-10 起；载入失败时自动改用二维心脏）。三维心脏选中后始终固定在顶部（只有一块 WebGL 画布），在「时相与数值」页也保留。
 - 二维心脏开启「固定心脏」时直接留在顶部，取消固定后随页面滚动；滚动本身不再切换或重建心脏画布。底部播放栏的「循环」旁有紧凑的「心音」开关，默认关闭。
@@ -271,3 +277,11 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - 注意：`data/labels.js` 由 `tools/sync-from-web.mjs` 从网站 `content/labels.zh.json` / `labels.en.json` 生成；负责人确认暂不改网站源，下次同步会把这句带回，届时需重新删除或改网站源。
 - 验证：`node --input-type=module` 导入 `data/labels.js` 通过（中文 255 键）。提交 `58fc467`，已推送 `main`；未上传、未发布。
 
+### 2026-10-23：异位刺激、期前收缩与代偿间歇（CC-60）
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)。负责人指示「Start CC-60 following the plan: port the ectopic stimulus to the WeChat mini program, test, commit and push there. Don't upload to WeChat or deploy.」，并在过程中追加「全部做完后，还需要更新『欢迎使用心动周期实验室』的说明」。网站来源：`claude/cc57-ectopy-engine` 分支 `2accc610`（网站 CC-57 引擎、CC-58 界面、CC-59 视图与本次的帮助文字），未并入网站 `master`。
+
+- 改动：`tools/sync-from-web.mjs`（复制 `ectopy.js`、`ectopy-sounds.js`、`ectopy-view.js`，生成 `data/ectopy.js`，`data/ecg12.js` 加 `ectopic`，同步时去掉帮助文字的小测句）；重新同步 `engine/`、`data/`，重新打包 `vendor/atlas3d.js`（模型文件名不变）；`pages/lab/lab.js`（按钮、结果行、节律条标签与画布、刺激后的缓存失效——「每拍相同」判断与曲线缓存的键加入拍计划版本、下一拍的共享样本作废、三维重新定位——清空规则与新模型对象、期前收缩心音、数值表「本拍类型」、胸导联期前发现）；`lab.wxml`、`lab.wxss`；新增 `tools/ectopy.test.mjs`、`tools/check-ectopy-bundle.mjs`；`tools/chest-leads.test.mjs` 可用 `CARDIAC_WEB` 指定网站目录；`tools/check-scenario-switch.mjs` 适配网站把 `sample()` 改名为 `sinusSample()`。
+- 网站一侧为此做的修正：三维 ⚡ 标记原是画布贴图精灵，要用 `document`，在三维包里建不起来，整个异位激动场因此失效（`check-scenario-switch` 打出「Ectopic conduction unavailable」）；改为面向镜头的扁平网格。
+- 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 35/35（新增 4 项：复制的模块、文字与胸导联条目与网站相同；帮助文字有刺激说明、无小测句；真实页面定义加假画布——不应期内无反应且自动继续、第一次切到节律条、期前收缩结论「= 1.60 s = 2 × 0.80 s（完全代偿间歇）」、节律条记录期前拍与间歇后拍并量出 2 × RR、数值表有本拍类型；改心率、负荷、情景清空刺激，切回情景是新的模型，房颤与三度阻滞禁用）。`tools/check-ectopy-bundle.mjs`：实际的三维包在网站生产运动模型上建好异位激动场（9 个几何体），只在期前拍换上、束支延迟置零、标记显示，间歇后逐值复原。`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。Chrome 中用小程序自己的 `engine/` 副本在 375 px 宽绘制节律条（RR 0.80 → 0.49 → 1.11 → 0.80，括号 1.60 s = 2 × 0.80 s）与期前拍的二维心脏（⚡ 与右室路径），无页面错误。
+- 未验证：微信开发者工具与真机（新画布的原生层、点按节律条暂停、三维包里 ShapeGeometry 标记的绘制）；未上传、未发布。

@@ -97,7 +97,11 @@
       <view class="ecg-tabs">
         <view class="ecg-tab {{ecgTab === 'wiggers' ? 'on' : ''}}" data-tab="wiggers" bindtap="setEcgTab">{{t.tabWiggers}}</view>
         <view class="ecg-tab {{ecgTab === 'chest' ? 'on' : ''}}" data-tab="chest" bindtap="setEcgTab">{{t.tabChest}}<text wx:if="{{chestKey}}" class="ecg-dot"></text></view>
+        <view class="ecg-tab {{ecgTab === 'rhythm' ? 'on' : ''}}" data-tab="rhythm" bindtap="setEcgTab">{{t.tabRhythm}}</view>
       </view>
+      <!-- CC-60: the ectopic stimulus (website CC-58) -->
+      <view class="stimulus-row"><view class="stimulus-button {{stimulusDisabled ? 'off' : ''}}" bindtap="stimulate">{{t.ectopicStimulus}}</view></view>
+      <view wx:if="{{ectopyText}}" class="ectopy-result {{ectopyOutcome}}">{{ectopyText}}</view>
       <canvas wx:if="{{ecgTab === 'wiggers'}}" type="2d" id="strips" class="strips-canvas chart-canvas" bindtouchstart="stripStart" bindtouchmove="stripMove" bindtouchend="stripEnd" bindtouchcancel="stripCancel"></canvas>
       <block wx:if="{{ecgTab === 'chest'}}">
         <view class="chest-modes">
@@ -114,6 +118,10 @@
         <view class="chest-title">{{t.chestFindings}}</view>
         <view class="chest-finding {{item.on ? 'on' : ''}}" wx:for="{{chestFindings}}" wx:key="id" data-index="{{item.index}}" bindtap="toggleFinding"><text class="chest-tag">{{item.tag}}</text><text class="chest-text">{{item.text}}</text></view>
         <view class="chest-note">{{t.chestNote}}</view>
+      </block>
+      <block wx:if="{{ecgTab === 'rhythm'}}">
+        <canvas type="2d" id="rhythmStrip" class="rhythm-strip chart-canvas" bindtap="togglePlay"></canvas>
+        <view class="chest-note">{{t.rhythmNote}}</view>
       </block>
       <view class="sound-caption">{{soundCaption}}</view>
       <view class="text-button left" bindtap="readValues">{{t.readValues}}</view>

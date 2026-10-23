@@ -20,6 +20,10 @@ import { scenarioView } from "../../engine/scenario-views.js";
 import ecg12 from "../../data/ecg12.js";
 import { ChestLeadsView } from "../../engine/chest-leads-view.js";
 import { buildEcg12Spec, leadVoltages, CHEST_LEADS } from "../../engine/ecg12.js";
+// CC-60: the ectopic stimulus (website CC-57…59).
+import ectopyLabels from "../../data/ectopy.js";
+import { RhythmStrip, summarizeStimulus } from "../../engine/ectopy-view.js";
+import { gatePrematureSounds, soundsAt } from "../../engine/ectopy-sounds.js";
 
 const PRESETS = ["anatomy", "xray", "conduction", "filling", "flow"];
 const VERSION = "1.0.0"; // the website's package.json version this copy follows
@@ -150,7 +154,8 @@ const i18n = {
   dictionaries: labels, // read by the 3D heart (AtlasLabView)
   t(key) {
     // ecg12.labels: the chest-lead tab's own strings (website content/ecg12/labels.json).
-    return OVERRIDES[this.language][key] ?? labels[this.language][key] ?? ecg12.labels[this.language]?.[key] ?? labels.en[key] ?? ecg12.labels.en[key] ?? key;
+    // ectopyLabels: the ectopic stimulus's own strings (website content/ectopy/labels.json).
+    return OVERRIDES[this.language][key] ?? labels[this.language][key] ?? ecg12.labels[this.language]?.[key] ?? ectopyLabels[this.language]?.[key] ?? labels.en[key] ?? ecg12.labels.en[key] ?? ectopyLabels.en[key] ?? key;
   },
   local(value) {
     return typeof value === "object" ? (value?.[this.language] ?? value?.en ?? "") : (value ?? "");
@@ -164,6 +169,7 @@ const TEXT_KEYS = [
   "pvTitle", "preload", "afterload", "contractility", "resetLoads", "apTitle",
   "apHint", "tWave", "erp", "electricalNote", "loop", "speed", "heartRate", "scenario",
   "tabWiggers", "tabChest", "chestModeSync", "chestModePaper", "chestFindings", "chestNote",
+  "tabRhythm", "ectopicStimulus", "rhythmNote",
   "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
 ];
 
@@ -225,6 +231,11 @@ Page({
     chestRows: [],
     chestFindings: [],
     valueRows: [],
+    // CC-60: the ectopic stimulus's result line (empty before the first
+    // stimulus: as on the website's phones) and its button.
+    ectopyText: "",
+    ectopyOutcome: "idle",
+    stimulusDisabled: false,
   },
 
   // ---- lifecycle -----------------------------------------------------------
@@ -254,6 +265,7 @@ Page({
     this.chartsSeen = { strips: true, pv: true, ap: true };
     this.model = scenarioModel(scenarios[0]);
     this.clock = new MasterClock(this.model, { hr: scenarios[0].hr ?? 75, speed: SPEEDS[2], playing: true });
+    this.ectopyResult = null;
     this.refreshContent();
   },
   onReady() {
@@ -319,11 +331,17 @@ Page({
   // The answer is kept per scenario, rate and loading (beatChecks).
   checkBeats() {
     const { model, clock } = this, hr = clock.hr, mods = this.modifiers, T = model.cycleDuration(hr, 0);
-    const key = [model.scenario.id, hr, mods.preload, mods.afterload, mods.contractility].join("|");
+    // The ectopic beat plan's version is part of the key (CC-60); any
+    // stimulus at this rate makes the beats differ wherever it falls.
+    const key = [model.scenario.id, hr, mods.preload, mods.afterload, mods.contractility, model.ectopy.version].join("|");
     const differ = (x, y) => !(Math.abs(x - y) <= BEAT_TOLERANCE);
     this.nextBeat = null;
     model.shareBeat?.(null);
     if (beatChecks.has(key)) return void (this.sameBeats = beatChecks.get(key));
+    if (model.ectopy.events.some((e) => e.hr === hr)) {
+      beatChecks.set(key, false);
+      return void (this.sameBeats = false);
+    }
     this.sameBeats = true;
     for (let beat = 1; beat < 8 && this.sameBeats; beat++) {
       if (model.cycleDuration(hr, beat) !== T) this.sameBeats = false;
@@ -344,6 +362,7 @@ Page({
     const beat = this.clock.beatIndex;
     if (this.sameBeats) {
       this.previousBeat = beat;
+      this.recordRhythmBeat(); // every beat under its own index
       return;
     }
     const next = this.nextBeat;
@@ -400,8 +419,11 @@ Page({
     this.charts?.setData(this.series, schedule, baseline, this.data.sideIndex ? "right" : "left");
     if (this.chest) {
       if (this.chest.spec?.scenarioId !== model.scenario.id) this.chest.setScenario(this.chestSpec(), ecg12.entries[model.scenario.id]);
-      this.chest.setData({ series: this.series, schedule, beatIndex: clock.beatIndex, sameBeat: !!this.sameBeats, hr: clock.hr, modifiers: this.modifiers });
+      this.chest.setEctopic(ecg12.ectopic, model.ectopy.active);
+      // T: the beat's own length (a beat cut by a stimulus keeps its samples' template T).
+      this.chest.setData({ series: this.series, schedule, beatIndex: clock.beatIndex, sameBeat: !!this.sameBeats, hr: clock.hr, modifiers: this.modifiers, T: model.cycleDuration(clock.hr, clock.beatIndex) });
     }
+    this.recordRhythmBeat();
     const T = model.cycleDuration(clock.hr, clock.beatIndex);
     this.setData({
       chestKey: !!ecg12.entries[model.scenario.id]?.keyFinding,
@@ -428,12 +450,13 @@ Page({
   // display toggle, redraws without resampling (a series is about 1 MB).
   cycleSeries() {
     const { model, clock } = this, hr = clock.hr, beat = clock.beatIndex, mods = this.modifiers;
-    const key = [model.scenario.id, hr, beat, mods.preload, mods.afterload, mods.contractility].join("|");
+    const key = [model.scenario.id, hr, beat, mods.preload, mods.afterload, mods.contractility, model.ectopy.version].join("|");
     let series = seriesCache.get(key);
     seriesCache.delete(key);
     if (!series) {
       const T = model.cycleDuration(hr, beat);
-      series = Array.from({ length: 400 }, (_, i) => model.sample((T * i) / 400, hr, mods, beat));
+      // A premature beat's S1/S2 sit on its own valve closures (website CC-59).
+      series = gatePrematureSounds(Array.from({ length: 400 }, (_, i) => model.sample((T * i) / 400, hr, mods, beat)), baseline);
     }
     seriesCache.set(key, series);
     if (seriesCache.size > 3) seriesCache.delete(seriesCache.keys().next().value);
@@ -454,6 +477,7 @@ Page({
       else if (seen.ap) this.charts.renderAP(sample);
     }
     if (this.chest && this.chartsSeen.chestStrips !== false) this.chest.update(sample);
+    if (this.rhythm?.canvas && this.chartsSeen.rhythmStrip !== false) this.rhythm.update(sample);
     const frame = { model, sample, t: clock.t, hr: clock.hr, beatIndex: beat, modifiers: this.modifiers, baseline };
     if (this.data.heartModel === "atlas") {
       if (this.atlas) this.stepAtlas(frame, atlasForce);
@@ -465,7 +489,7 @@ Page({
     const now = Date.now();
     if (!force && clock.playing && now - (this.lastUi ?? 0) < UI_MS) return;
     this.lastUi = now;
-    const sounds = Object.entries(sample.sounds).filter(([, v]) => v > 0.08).map(([k]) => k.toUpperCase());
+    const sounds = Object.entries(this.soundsOf(sample)).filter(([, v]) => v > 0.08).map(([k]) => k.toUpperCase());
     this.setData({
       time: (sample.t / 1000).toFixed(3),
       scrub: Math.round(sample.t),
@@ -520,6 +544,8 @@ Page({
     );
     if (this.data.ecgTab === "chest") await this.attachChest();
     else this.chest = null;
+    if (this.data.ecgTab === "rhythm") await this.attachRhythm();
+    else this.rhythmStrip().canvas = null;
     this.watchCharts();
     this.rebuild();
   },
@@ -533,7 +559,8 @@ Page({
   chestSpec() {
     const scenario = this.model.scenario;
     if (!this.chestSpecs) this.chestSpecs = new Map();
-    if (!this.chestSpecs.has(scenario.id)) this.chestSpecs.set(scenario.id, buildEcg12Spec(scenario, ecg12.entries[scenario.id], baseline));
+    // With the premature ventricular beat's own waves (website CC-59).
+    if (!this.chestSpecs.has(scenario.id)) this.chestSpecs.set(scenario.id, buildEcg12Spec(scenario, ecg12.entries[scenario.id], baseline, ecg12.ectopic));
     return this.chestSpecs.get(scenario.id);
   },
   async attachChest() {
@@ -552,19 +579,123 @@ Page({
   setEcgTab(e) {
     const tab = e.currentTarget.dataset.tab;
     if (tab === this.data.ecgTab) return;
-    if (tab === "chest") this.canvases.strips = null; // about to go
-    else this.chest = null;
+    // The canvases of the tab being left are about to go.
+    if (tab !== "wiggers") this.canvases.strips = null;
+    if (tab !== "chest") this.chest = null;
+    if (tab !== "rhythm") this.rhythmStrip().canvas = null;
     this.setData({ ecgTab: tab, chestRows: [] }, async () => {
       if (!this.charts) return;
-      if (tab === "chest") {
+      if (tab === "wiggers") this.charts.strips = this.stripsNode(await this.bindCanvas("strips", "raw"));
+      else {
         this.charts.strips = this.stripsNode(null);
-        await this.attachChest();
-      } else {
-        this.charts.strips = this.stripsNode(await this.bindCanvas("strips", "raw"));
+        if (tab === "chest") await this.attachChest();
+        else await this.attachRhythm();
       }
       this.watchCharts();
       this.rebuild();
     });
+  },
+  // ---- the ectopic stimulus (CC-60; website CC-57…59) ----------------------
+  // The rhythm strip records every beat played; its canvas exists only on
+  // its tab (attachRhythm).
+  rhythmStrip() {
+    return (this.rhythm ??= new RhythmStrip({ canvas: null, i18n, erpMs: baseline.physiology.ventricularErpMs }));
+  },
+  // The rhythm strip (website js/ectopy-view.js) on its tab's canvas.
+  async attachRhythm() {
+    const c = await this.bindCanvas("rhythmStrip", "raw");
+    this.rhythmStrip().canvas = c ? adoptCanvas(c.node, c.w, c.h) : null;
+  },
+  // Every beat played goes to the rhythm strip under its own index (beat 0's
+  // traces when all beats are the same), with the beat's own length.
+  recordRhythmBeat() {
+    const { model, clock } = this;
+    if (!this.series) return;
+    this.rhythmStrip().setBeat({ model, series: this.series, beatIndex: clock.beatIndex, hr: clock.hr, modifiers: this.modifiers, T: model.cycleDuration(clock.hr, clock.beatIndex) });
+  },
+  // A premature beat's gated sounds (cycleSeries) for the caption and values.
+  soundsOf(sample) {
+    return sample.ectopy?.kind === "pvc" && this.series ? soundsAt(this.series, sample.t) : sample.sounds;
+  },
+  // The engine decides (refractory / premature beat / disabled) at the
+  // clock's instant; paused, the stimulus lands at the cursor and playback
+  // resumes, since the pause is only seen over time (decision D7).
+  stimulate() {
+    const { model, clock } = this;
+    if (this.data.stimulusDisabled) return;
+    this.plotResume?.cancel();
+    const beat = clock.beatIndex, t = clock.t, paused = !clock.playing;
+    let result;
+    try {
+      result = model.ectopy.stimulate(beat, t, clock.hr, this.modifiers);
+    } catch (error) {
+      console.warn("Stimulus not applied:", error);
+      return;
+    }
+    const notes = [];
+    if (result.outcome === "pvc") {
+      // This beat ends here and the next ones are new: drop what was prepared
+      // for the old plan and rebuild at once.
+      this.nextBeat = null;
+      model.shareBeat?.(null);
+      if (this.atlas) this.atlas.stateKey = undefined;
+      this.rebuild();
+    } else if (result.outcome === "refractory") this.rhythmStrip().addRefractory(beat, t);
+    const responded = result.outcome !== "disabled" || result.reason === "one-per-cycle";
+    if (responded && paused) {
+      clock.playing = true;
+      clock.lastNow = null;
+      notes.push("ectopyResumed");
+    }
+    // The first stimulus shows the rhythm strip once.
+    if (responded && !this.rhythmShown && this.data.ecgTab !== "rhythm") {
+      this.setEcgTab({ currentTarget: { dataset: { tab: "rhythm" } } });
+      notes.push("ectopySwitched");
+    }
+    if (responded) this.rhythmShown = true;
+    this.ectopyResult = { result, summary: result.outcome === "pvc" ? summarizeStimulus(model, result, clock.hr, this.modifiers) : null, notes };
+    this.renderEctopyResult();
+    this.update(true);
+  },
+  // Scenario, rate or loading changed: no stimuli. A plan cleared starts a
+  // fresh model, so no per-model beat table of the old plan is reused.
+  resetEctopy() {
+    if (this.model.ectopy.active) {
+      const scenario = this.model.scenario;
+      this.model.shareBeat?.(null);
+      this.model = shareableSamples(createModel(baseline, scenario));
+      models.set(scenario, this.model);
+      this.clock.model = this.model;
+      this.nextBeat = null;
+    }
+    this.ectopyResult = null;
+    this.renderEctopyResult();
+  },
+  // The button (off in atrial fibrillation and complete block) and the result line.
+  renderEctopyResult() {
+    const reason = this.model.ectopy.disabledReason, t = (k) => i18n.t(k);
+    const fill = (text, values) => text.replace(/\{(\w+)\}/g, (m, k) => values[k] ?? m);
+    const seconds = (ms) => (ms / 1000).toFixed(2);
+    let text = "", outcome = "idle";
+    if (reason) {
+      text = t({ "atrial-fibrillation": "ectopyDisabledAf", "complete-block": "ectopyDisabledBlock" }[reason] ?? "ectopyDisabledOther");
+      outcome = "disabled";
+    } else if (this.ectopyResult) {
+      const { result: r, summary: s, notes } = this.ectopyResult;
+      outcome = r.outcome;
+      if (r.outcome === "pvc")
+        text = fill(t("ectopyPvc"), { t: Math.round(r.tMs), pre: seconds(s.preMs), post: seconds(s.postMs), sum: seconds(s.sumMs), rr: seconds(s.rrMs), sv: Math.round(s.svMl), svPost: Math.round(s.postSvMl) }) +
+          (s.ejected ? "" : t("ectopyNoPulse")) + (s.onT ? t("ectopyRonT") : "");
+      else if (r.outcome === "refractory") text = fill(t("ectopyRefractory"), { t: Math.round(r.tMs), erp: Math.round(r.erpMs) });
+      else text = fill(t("ectopyOnePerCycle"), { t: Math.round(r.tMs) });
+      text += notes.map(t).join("");
+    }
+    this.setData({ ectopyText: text, ectopyOutcome: outcome, stimulusDisabled: !!reason });
+  },
+  beatTypeText(s) {
+    const kind = s.ectopy?.kind;
+    if (kind === "pvc") return i18n.t("beatPvc").replace("{t}", Math.round(s.ectopy.stimulusMs));
+    return i18n.t(kind === "post" ? "beatPost" : "beatSinus");
   },
   setChestMode(e) {
     const mode = e.currentTarget.dataset.mode;
@@ -698,7 +829,10 @@ Page({
       scenarioIndex: scenarios.indexOf(this.model.scenario),
     });
     wx.setNavigationBarTitle({ title: i18n.language === "zh" ? "心动周期" : "Cardiac Cycle" });
-    if (this.model) this.syncShuntKey();
+    if (this.model) {
+      this.syncShuntKey();
+      this.renderEctopyResult();
+    }
     if (this.heart2d) {
       this.heart2d.setLanguage(i18n.language);
       this.atlas?.translate();
@@ -741,6 +875,7 @@ Page({
     const rows = [
       [i18n.t("phase"), i18n.local(s.phase.name)],
       [i18n.t("time"), `${s.t.toFixed(1)} ms`],
+      [i18n.t("beatType"), this.beatTypeText(s)],
       [i18n.t("heartRate"), `${this.clock.hr} bpm`],
       [i18n.t("ecg"), `${s.ecg.toFixed(2)} mV`],
       ...Object.entries(leadVoltages(s, this.chestSpec(), CHEST_LEADS)).map(([lead, v]) => [lead, `${v.toFixed(2)} mV`]),
@@ -752,7 +887,7 @@ Page({
         ? [i18n.t("atrialSeptalDefect"), `${i18n.t("asdLeftToRight")} · LA−RA ${(-s.interatrial.gradient).toFixed(1)} mmHg`]
         : [i18n.t("foramenOvale"), `${i18n.t(s.interatrial.open ? "foramenOpen" : "foramenClosed")} · RA−LA ${s.interatrial.gradient.toFixed(1)} mmHg`]] : []),
       ...Object.entries(s.ap ?? {}).map(([id, v]) => [i18n.t(id), `${Number(v).toFixed(1)} mV`]),
-      [i18n.t("sounds"), Object.entries(s.sounds).filter(([, v]) => v > 0.08).map(([id]) => id.toUpperCase()).join(" · ") || i18n.t("noSound")],
+      [i18n.t("sounds"), Object.entries(this.soundsOf(s)).filter(([, v]) => v > 0.08).map(([id]) => id.toUpperCase()).join(" · ") || i18n.t("noSound")],
     ];
     this.setData({ dialog: "values", valueRows: rows.map(([k, v]) => ({ k, v })) });
   },
@@ -1201,11 +1336,13 @@ Page({
     const key = e.currentTarget.dataset.key, value = Number(e.detail.value);
     this.modifiers[key] = value;
     this.setData({ [`mods.${key}`]: value, [`modsText.${key}`]: value.toFixed(2) + "×" });
+    this.resetEctopy();
     this.rebuild();
   },
   resetLoads() {
     this.modifiers = { preload: 1, afterload: 1, contractility: 1 };
     this.setData({ mods: { ...this.modifiers }, modsText: { preload: "1.00×", afterload: "1.00×", contractility: "1.00×" } });
+    this.resetEctopy();
     this.rebuild();
   },
   toggleRepolarization() {
@@ -1267,6 +1404,7 @@ Page({
     this.setData({ speedIndex });
   },
   onHR(e) {
+    this.resetEctopy();
     this.clock.setHR(Number(e.detail.value));
     this.rebuild();
   },
@@ -1279,6 +1417,7 @@ Page({
     this.stopSharing();
     this.model?.shareBeat?.(null);
     this.model = scenarioModel(scenario);
+    this.resetEctopy();
     this.model.shareSamples(true);
     this.clock.reset(this.model);
     this.clock.setHR(scenario.hr);
@@ -1407,7 +1546,8 @@ function shareableSamples(model) {
 // the 3D heart's motion tables as they are in beat 0 (stepAtlas).
 const pfoRepeats = (model) => {
   const p = model?.patch;
-  return !!p?.pfo && !p.asd && !p.rrSequence && !p.atrialFibrillation && !p.completeBlock;
+  // (Not with ectopic stimuli: they change the beats themselves.)
+  return !!p?.pfo && !p.asd && !p.rrSequence && !p.atrialFibrillation && !p.completeBlock && !model.ectopy?.active;
 };
 // The last few traces (cycleSeries) and every "same beats" answer (checkBeats).
 const seriesCache = new Map(), beatChecks = new Map();
