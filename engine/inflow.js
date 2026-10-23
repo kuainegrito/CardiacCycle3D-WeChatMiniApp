@@ -38,8 +38,10 @@ const STEPS = 60;
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 // Scenarios whose beats differ keep one integral table per beat; the others
-// reuse beat 0's.
-const varies = (model) => !!(model.patch?.rrSequence || model.patch?.completeBlock || model.patch?.pfo);
+// reuse beat 0's. CC-61 R2: so does a model with ectopic stimuli (premature
+// and post-pause beats differ in length and filling).
+const varies = (model) =>
+  !!(model.patch?.rrSequence || model.patch?.completeBlock || model.patch?.pfo || model.ectopy?.active);
 const caches = new WeakMap();
 
 function integrals(model, hr, modifiers, beatIndex, atrialSettings) {

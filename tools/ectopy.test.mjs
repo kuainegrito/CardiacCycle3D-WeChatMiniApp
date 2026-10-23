@@ -73,13 +73,24 @@ function pauseAt(page, share) {
   clock.playing = false;
   clock.seek(share < 0 ? q + erp * 0.4 : q + erp + 5 + share * (T - q - erp - 10));
 }
+// One 16 ms frame of the page's own loop (lab.js loop): the stimulus hold,
+// the Loop rule, the clock, a new beat, preparing the next one.
+let now = 1e6;
+function frame(page) {
+  now += 16;
+  if (page.holding(now)) page.clock.lastNow = now;
+  else {
+    page.syncLoop();
+    page.clock.update(now);
+  }
+  if (page.previousBeat !== page.clock.beatIndex) page.newBeat();
+  page.prepareNextBeat();
+}
 // Play the clock on through the page's own beat handling.
 function play(page, ms) {
   page.clock.playing = true;
-  for (let t = 0; t < ms; t += 16) {
-    page.clock.advance(16);
-    if (page.previousBeat !== page.clock.beatIndex) page.newBeat();
-  }
+  page.clock.lastNow = now;
+  for (let t = 0; t < ms; t += 16) frame(page);
   page.clock.playing = false;
   page.update(true);
 }
@@ -127,8 +138,8 @@ test("inside the ERP no response; after it a premature beat with a complete comp
   assert.equal(page.data.ectopyOutcome, "pvc");
   assert.match(page.data.ectopyText, /= 1\.60 s = 2 × 0\.80 s（完全代偿间歇）/);
   assert.doesNotMatch(page.data.ectopyText, /已切换到节律条/, "the strip opens only once");
-  assert.equal(page.sameBeats, false);
-  play(page, 2600);
+  assert.ok(page.stimulusHold, "the clock waits for the premature beat (CC-61)");
+  play(page, 3200);
   const kinds = [...page.rhythm.beats.entries()].filter(([b]) => b > k).map(([, b]) => b.kind);
   assert.ok(kinds.includes("pvc") && kinds.includes("post"), kinds.join(","));
   const pauses = page.rhythm.pauses(page.clock.t);
@@ -168,4 +179,51 @@ test("a scenario, rate or loading change clears the stimuli; AF and complete blo
     page.stimulate();
     assert.equal(page.model.ectopy.active, false);
   }
+});
+
+test("CC-61: the clock waits at the stimulus while the premature beat is prepared, then plays it", async () => {
+  const { page } = await open("normal");
+  pauseAt(page, 0.45);
+  const k = page.clock.beatIndex,
+    c = page.clock.t;
+  page.stimulate();
+  page.clock.lastNow = now;
+  let held = 0;
+  while (page.clock.beatIndex === k && held < 2000) {
+    frame(page);
+    if (page.clock.beatIndex === k) {
+      held++;
+      assert.equal(page.clock.t, c, "the clock does not move while it waits");
+    }
+  }
+  assert.equal(page.clock.beatIndex, k + 1);
+  assert.ok(held >= 1, "it waited at least one frame");
+  assert.equal(page.stimulusHold, null);
+  assert.equal(page.sameBeats, false);
+  assert.equal(page.series[0].ectopy?.kind, "pvc", "the premature beat's prepared traces");
+  assert.equal(page.series.length, 400);
+});
+
+test("CC-61 R1: with Loop off the premature beat, the pause and the post-pause beat still play", async () => {
+  const { page } = await open("normal");
+  page.toggleLoop();
+  assert.equal(page.data.loop, false);
+  pauseAt(page, 0.45);
+  const k = page.clock.beatIndex;
+  page.stimulate();
+  assert.equal(page.clock.playing, true);
+  page.clock.lastNow = now;
+  for (let i = 0; i < 5000 && page.clock.playing; i++) frame(page);
+  assert.equal(page.clock.playing, false);
+  assert.equal(page.clock.beatIndex, k + 2, "stops in the post-pause beat");
+  assert.ok(page.model.cycleDuration(page.clock.hr, k + 2) - page.clock.t < 0.01, "at its end");
+  assert.equal(page.data.loop, false, "the Loop setting itself is unchanged");
+  // Without a stimulus, Loop off still stops at the end of the beat.
+  const plain = (await open("normal")).page;
+  plain.toggleLoop();
+  plain.clock.playing = true;
+  plain.clock.lastNow = now;
+  const b = plain.clock.beatIndex;
+  for (let i = 0; i < 500 && plain.clock.playing; i++) frame(plain);
+  assert.equal(plain.clock.beatIndex, b);
 });

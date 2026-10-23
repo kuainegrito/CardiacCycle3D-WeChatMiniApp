@@ -24,6 +24,7 @@ import { buildEcg12Spec, leadVoltages, CHEST_LEADS } from "../../engine/ecg12.js
 import ectopyLabels from "../../data/ectopy.js";
 import { RhythmStrip, summarizeStimulus } from "../../engine/ectopy-view.js";
 import { gatePrematureSounds, soundsAt } from "../../engine/ectopy-sounds.js";
+import { ectopicRunOn } from "../../engine/beats.js";
 
 const PRESETS = ["anatomy", "xray", "conduction", "filling", "flow"];
 const VERSION = "1.0.0"; // the website's package.json version this copy follows
@@ -41,6 +42,10 @@ const BEAT_TOLERANCE = 1e-9;
 // assuming frames this far apart (slower than 60 Hz on a busy phone).
 const PREPARE_MS = 8;
 const PREPARE_FRAME_MS = 33;
+// CC-61 (website app.js): a stimulus ends the current beat at once, so the
+// premature beat gets none of that preparation time; the clock waits at the
+// end of the shortened beat while it is prepared, this long a frame.
+const HOLD_PREPARE_MS = 12;
 // The 3D heart's motion steps: at most one per 60 Hz frame (a 120 Hz screen
 // would draw it twice as often), and on a slow phone at most three quarters
 // of the time (stepAtlas).
@@ -377,7 +382,7 @@ Page({
   // is spread over the frames left in the current beat, at most PREPARE_MS a
   // frame.
   prepareNextBeat() {
-    if (this.sameBeats || !this.clock.playing) return;
+    if ((this.sameBeats || !this.clock.playing) && !this.stimulusHold) return;
     const { model, clock } = this, beat = clock.beatIndex + 1;
     let next = this.nextBeat;
     if (!next || next.beat !== beat || next.hr !== clock.hr) {
@@ -387,7 +392,7 @@ Page({
     }
     const left = (model.cycleDuration(clock.hr, clock.beatIndex) - clock.t) / Math.max(clock.speed, 1e-3);
     let count = Math.ceil((400 - next.out.length + next.grid.length) / Math.max(1, Math.floor(left / PREPARE_FRAME_MS) - 1));
-    const end = Date.now() + PREPARE_MS;
+    const end = Date.now() + (this.stimulusHold ? HOLD_PREPARE_MS : PREPARE_MS);
     while (!next.done && count-- > 0 && Date.now() < end) {
       if (next.out.length < 400) next.out.push(model.sample((next.T * next.out.length) / 400, clock.hr, this.modifiers, beat));
       else model.sample(next.grid.pop(), clock.hr, this.modifiers, beat);
@@ -635,11 +640,13 @@ Page({
     const notes = [];
     if (result.outcome === "pvc") {
       // This beat ends here and the next ones are new: drop what was prepared
-      // for the old plan and rebuild at once.
+      // for the old plan and hold the clock while the premature beat is
+      // prepared (holding; CC-61). Up to the stimulus this beat is unchanged,
+      // so its traces and tables stay; the rhythm strip takes its new length.
       this.nextBeat = null;
       model.shareBeat?.(null);
-      if (this.atlas) this.atlas.stateKey = undefined;
-      this.rebuild();
+      this.stimulusHold = { model, beat: result.pvcBeat };
+      this.recordRhythmBeat();
     } else if (result.outcome === "refractory") this.rhythmStrip().addRefractory(beat, t);
     const responded = result.outcome !== "disabled" || result.reason === "one-per-cycle";
     if (responded && paused) {
@@ -660,6 +667,7 @@ Page({
   // Scenario, rate or loading changed: no stimuli. A plan cleared starts a
   // fresh model, so no per-model beat table of the old plan is reused.
   resetEctopy() {
+    this.stimulusHold = null;
     if (this.model.ectopy.active) {
       const scenario = this.model.scenario;
       this.model.shareBeat?.(null);
@@ -800,7 +808,11 @@ Page({
     this.lastFrame = Date.now();
     this.inFrame = true; // 3D steps happen here (stepAtlas)
     try {
-      this.clock.update(this.lastFrame);
+      if (this.holding(this.lastFrame)) this.clock.lastNow = this.lastFrame;
+      else {
+        this.syncLoop();
+        this.clock.update(this.lastFrame);
+      }
       if (this.previousBeat !== this.clock.beatIndex) this.newBeat();
       if (this.atlasScene && !this.atlasScene.settling) this.settleAtlas();
       else if (this.clock.playing || this.atlasWant || Math.abs(this.clock.t - (this.sample?.t ?? -1)) > 1e-5)
@@ -1395,8 +1407,40 @@ Page({
     this.update(true, e.type === "change");
   },
   toggleLoop() {
-    this.clock.loop = !this.data.loop;
-    this.setData({ loop: this.clock.loop });
+    this.loopPreference = !this.data.loop;
+    this.syncLoop();
+    this.setData({ loop: this.loopPreference });
+  },
+  // CC-61 R1 (website app.js syncLoop): the Loop setting, or the clock runs on
+  // through a stimulus's shortened and premature beats, so that with Loop off
+  // the premature beat, the pause and the post-pause beat are still seen; it
+  // stops at the end of the post-pause beat.
+  syncLoop() {
+    const { clock } = this;
+    clock.loop = this.loopPreference !== false || ectopicRunOn(this.model, clock.beatIndex, clock.hr);
+  },
+  // CC-61 (website app.js holding): true while the clock waits for the
+  // premature beat to be prepared, or on a slow phone for a post-pause beat
+  // that was not prepared by the end of the beat before it (within two frames
+  // of that end), instead of building it in one long task.
+  holding(now) {
+    const { model, clock } = this;
+    if (!this.stimulusHold && !this.sameBeats && clock.playing && clock.lastNow !== null) {
+      const b = clock.beatIndex,
+        left = (model.cycleDuration(clock.hr, b) - clock.t) / Math.max(clock.speed, 1e-3);
+      if (
+        left < 2 * Math.max(16, now - clock.lastNow) &&
+        !(this.nextBeat?.beat === b + 1 && this.nextBeat.done) &&
+        model.ectopy.events.some((e) => e.hr === clock.hr && e.beat + 1 <= b && b <= e.beat + 2)
+      )
+        this.stimulusHold = { model, beat: b + 1 };
+    }
+    const h = this.stimulusHold;
+    if (!h) return false;
+    if (h.model === model && clock.beatIndex === h.beat - 1 && !(this.nextBeat?.beat === h.beat && this.nextBeat.done)) return true;
+    this.stimulusHold = null;
+    if (h.model === model) this.sameBeats = false;
+    return false;
   },
   onSpeed(e) {
     const speedIndex = Number(e.detail.value);

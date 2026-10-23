@@ -90,6 +90,7 @@
 - 2026-10-20：三维心脏载入后若 15 秒没有被触摸，显示一次性「拖动可旋转心脏」手势提示（动画手 + 胶囊文字，3 秒后消失；每次打开最多一次，先触摸心脏则不显示）。初版为 30 秒，同日按负责人指示改为 15 秒。初版由 Claude、15 秒调整由 Kimi（Moonshot AI）实施；未上传微信。
 - 2026-10-20：帮助窗口删去「页面底部有小测，可检验理解。」一句（英文对应句一并删除）。注意 `data/labels.js` 由 `tools/sync-from-web.mjs` 从网站 `content/` 生成，网站源文案未改，下次同步会带回这句；如需保留删除，应同时改网站源。由 Kimi（Moonshot AI）按负责人指示实施；未上传微信。
 - 2026-10-23（同步网站 CC-57…59，小程序 CC-60）：异位刺激。Wiggers 卡片新增「⚡ 异位刺激」按钮与第三个标签「节律条」：刺激落在心室有效不应期内无反应；之后出现一次室性期前收缩（宽 QRS、每搏量小，早的可以推不开主动脉瓣），随后完全代偿间歇（前后两个 RR 之和 = 两个窦性 RR）和间歇后增强的一拍；结果行写出这些数值，暂停时点按钮会在光标时刻施加并继续播放，第一次刺激自动切到节律条。节律条（最近 4 秒的Ⅱ导联、主动脉压、左室容积，标出刺激、不应期、RR 与「= 2 × RR」）、胸导联的期前形态与发现、二维心脏从右室起搏点出发的激动波与 ⚡、三维传导视图的异位激动场、期前收缩心音都直接用网站的代码。房颤、三度房室阻滞按钮禁用；切换情景、改心率或负荷时清空。帮助文字加了一段说明。网站来源：分支 `claude/cc57-ectopy-engine` 的 `2accc610`（尚未并入网站 `master`，网站也未部署）。由 Claude 按负责人指示实施；未上传微信。
+- 2026-10-23（二）（同步网站 CC-61 修复，`claude/cc57-ectopy-engine` 的 `81218f29`）：关闭「循环」时点 ⚡，期前收缩、代偿间歇和间歇后增强的一拍照常播放，停在间歇后那一拍末尾（原先时钟停在刺激时刻）；点 ⚡ 后不再卡一下：心脏在刺激时刻停几帧，期前拍分帧预备好再继续；期前拍与间歇后拍的二维充盈、三维流入按本拍计算。由 Claude 按负责人指示实施；未上传微信。
 
 ## 与网站的差异
 
@@ -285,3 +286,13 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - 网站一侧为此做的修正：三维 ⚡ 标记原是画布贴图精灵，要用 `document`，在三维包里建不起来，整个异位激动场因此失效（`check-scenario-switch` 打出「Ectopic conduction unavailable」）；改为面向镜头的扁平网格。
 - 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 35/35（新增 4 项：复制的模块、文字与胸导联条目与网站相同；帮助文字有刺激说明、无小测句；真实页面定义加假画布——不应期内无反应且自动继续、第一次切到节律条、期前收缩结论「= 1.60 s = 2 × 0.80 s（完全代偿间歇）」、节律条记录期前拍与间歇后拍并量出 2 × RR、数值表有本拍类型；改心率、负荷、情景清空刺激，切回情景是新的模型，房颤与三度阻滞禁用）。`tools/check-ectopy-bundle.mjs`：实际的三维包在网站生产运动模型上建好异位激动场（9 个几何体），只在期前拍换上、束支延迟置零、标记显示，间歇后逐值复原。`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。Chrome 中用小程序自己的 `engine/` 副本在 375 px 宽绘制节律条（RR 0.80 → 0.49 → 1.11 → 0.80，括号 1.60 s = 2 × 0.80 s）与期前拍的二维心脏（⚡ 与右室路径），无页面错误。
 - 未验证：微信开发者工具与真机（新画布的原生层、点按节律条暂停、三维包里 ShapeGeometry 标记的绘制）；未上传、未发布。
+
+### 2026-10-23（二）：关闭循环时的刺激、刺激时的等待预备、期前拍的充盈（网站 CC-61 修复）
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)。负责人指示「Port the R1 loop-off fix and the stimulus hold to the WeChat mini program (pages/lab/lab.js), re-sync inflow.js/beats.js, test, commit and push there. Don't upload to WeChat.」网站来源：`claude/cc57-ectopy-engine` 分支 `81218f29`（网站审阅 `docs/CC61_MERGE_REVIEW.md` 的 R1、R2 与刺激卡顿，修复见 `docs/CC61_FIXES.md`），未并入网站 `master`。
+
+- 改动：`tools/sync-from-web.mjs` 加复制 `js/beats.js`（`ectopicRunOn`）；重新同步后 `engine/inflow.js`（有刺激的模型每拍单独建充盈积分表，R2）与新的 `engine/beats.js` 改变，其余同步文件不变；`vendor/atlas3d.js` 重新打包（三维流入层用 `inflow.js`，模型文件名不变）。
+- `pages/lab/lab.js`：「循环」开关的值单独保存（`loopPreference`），每帧推进时钟前 `syncLoop()` 设 `clock.loop = 开关 || ectopicRunOn(...)`，关闭循环时期前收缩、间歇与间歇后一拍照常播放，停在间歇后那一拍末尾（R1）；点 ⚡ 产生期前收缩时不再当帧重建，时钟在截短拍末尾等待（`holding`），每帧 12 ms 预备期前拍，预备好再继续；手机慢、期前拍放完时间歇后的拍还没预备好时，同样在拍末等待（与网站 `js/app.js` 相同）。
+- 测试：`tools/ectopy.test.mjs` 的播放改为按页面自己的帧循环（等待、循环规则、时钟、新拍、预备）推进；新增 2 项：刺激后时钟在刺激时刻不动、预备好后进入期前拍且曲线是预备好的 400 个期前拍样本；关闭循环时停在间歇后那一拍末尾、开关仍为关闭，无刺激时仍停在本拍末尾。
+- 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 37/37；`check-ectopy-bundle`、`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。
+- 未验证：微信开发者工具与真机（等待几帧在真机上的观感、iOS 上的耗时）；未上传、未发布。网站分支仍未并入 `master`，小程序不应在网站发布前上传。

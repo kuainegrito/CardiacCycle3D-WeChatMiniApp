@@ -39,7 +39,8 @@ for (const file of ENGINE)
   await writeFile(join("engine", file), await readFile(join(web, "js/engine", file)));
 // Plain modules from the web app's js/ folder, copied with their engine
 // import paths flattened (engine/ is one folder here).
-const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js", "ecg12.js", "ecg12-modifiers.js", "ectopy-sounds.js"];
+// beats.js (CC-61): ectopicRunOn, the Loop-off rule of the ectopic stimulus.
+const PLAIN = ["scenario-views.js", "inflow.js", "heart2d-conduction.js", "pfo-inspection.js", "ecg12.js", "ecg12-modifiers.js", "ectopy-sounds.js", "beats.js"];
 for (const file of PLAIN)
   await writeFile(join("engine", file), (await readFile(join(web, "js", file), "utf8")).replaceAll('from "./engine/', 'from "./'));
 for (const [source, target, globals] of DOM_MODULES) {
