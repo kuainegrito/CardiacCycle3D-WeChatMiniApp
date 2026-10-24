@@ -173,12 +173,14 @@ export function createEctopy(host) {
   const plans = new Map(),
     pvcCache = new Map(),
     sinusRefs = new Map(),
-    pressureCache = new Map();
+    pressureCache = new Map(),
+    historyTables = new Map();
   const bump = () => {
     version++;
     plans.clear();
     pvcCache.clear();
     pressureCache.clear();
+    historyTables.clear();
   };
   const modKey = (m) => `${m.preload}|${m.afterload}|${m.contractility}`;
   const remember = (map, key, size, make) => {
@@ -646,8 +648,33 @@ export function createEctopy(host) {
   }
 
   // --- samples ------------------------------------------------------------
+  // The valves' 15 ms pressure look-back (valves.js) of a premature or
+  // post-pause beat, from that beat's pressures at whole milliseconds,
+  // interpolated between them. CC-61: computing each look-back instant afresh
+  // made a sample of these beats 15 states deep; a beat's 400 traces and its
+  // 3D tables (~1 000 samples, prepared at the press) took seconds on phones.
   function lookBack(desc, hr, modifiers) {
-    return (at) => statePressures(desc, at, hr, modifiers).pressures;
+    const key = `${hr}|${desc.beat}|${desc.kind}|${modKey(modifiers)}`;
+    let table = historyTables.get(key);
+    if (!table) {
+      if (historyTables.size >= 16) historyTables.clear();
+      historyTables.set(key, (table = new Map()));
+    }
+    const at = (k) => {
+      let v = table.get(k);
+      if (!v) table.set(k, (v = statePressures(desc, k, hr, modifiers).pressures));
+      return v;
+    };
+    return (t) => {
+      const k = Math.floor(t),
+        f = t - k,
+        a = at(k);
+      if (f === 0) return a;
+      const b = at(k + 1),
+        out = {};
+      for (const p in a) out[p] = a[p] + (b[p] - a[p]) * f;
+      return out;
+    };
   }
   function postSample(desc, t, hr, modifiers) {
     const time = modulo(t, desc.T),

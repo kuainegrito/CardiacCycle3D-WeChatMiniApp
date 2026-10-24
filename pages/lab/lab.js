@@ -44,8 +44,10 @@ const PREPARE_MS = 8;
 const PREPARE_FRAME_MS = 33;
 // CC-61 (website app.js): a stimulus ends the current beat at once, so the
 // premature beat gets none of that preparation time; the clock waits at the
-// end of the shortened beat while it is prepared, this long a frame.
-const HOLD_PREPARE_MS = 12;
+// end of the shortened beat while it is prepared, this long a frame. Larger
+// than the website's 12 ms: a phone's frames already take tens of ms, and the
+// heart waits anyway, so a bigger share shortens the wait (2026-10-24 hitch).
+const HOLD_PREPARE_MS = 20;
 // The 3D heart's motion steps: at most one per 60 Hz frame (a 120 Hz screen
 // would draw it twice as often), and on a slow phone at most three quarters
 // of the time (stepAtlas).
@@ -683,7 +685,9 @@ Page({
     if (responded) this.rhythmShown = true;
     this.ectopyResult = { result, summary: result.outcome === "pvc" ? summarizeStimulus(model, result, clock.hr, this.modifiers) : null, notes };
     this.renderEctopyResult();
-    this.update(true);
+    // The readouts now; the 3D heart steps at its own pace (nothing it shows
+    // changed at this instant, and a forced step cost a phone a frame).
+    this.update(true, false);
   },
   // Scenario, rate or loading changed: no stimuli. A plan cleared starts a
   // fresh model, so no per-model beat table of the old plan is reused.

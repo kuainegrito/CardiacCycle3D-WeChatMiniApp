@@ -214,8 +214,14 @@ export function atrialPressureOffsets(model, modifiers = {}, settings) {
   const t = validateAtrialTargets(settings).targets,
     cache = cacheFor(model, settings);
   return remember(cache.offsets, JSON.stringify(modifiers), () => {
+    // CC-61 R3: from the scenario without its ectopic plan. A stimulus in
+    // beat 0 would otherwise shift every beat's atrial targets, and only in a
+    // replay (which restores the plan before the first frame), not live.
+    const plain = model.ectopy?.events?.length
+      ? createModel(model.baseline, model.scenario)
+      : model;
     const scenario = meanPressures(
-        model,
+        plain,
         t.pressureReferenceHr,
         modifiers,
         t.samplingMs,

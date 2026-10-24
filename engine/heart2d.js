@@ -331,9 +331,24 @@ export function valveBlends(
   const { leftDelay = 0, rightDelay = 0 } = sample.conduction ?? {};
   const ramp = model.baseline.physiology.valveRampMs ?? 15;
   const at = new Map([[0, sample]]);
+  // CC-61 R4: with an ectopic plan the beats differ, so a look past this
+  // beat's end (or before its start) reads the next (previous) beat instead
+  // of wrapping round this one; without a plan nothing changes.
+  const planned = model.ectopy?.events?.length > 0,
+    L = planned ? model.cycleDuration(hr, beatIndex) : 0;
   const get = (offset) => {
-    if (!at.has(offset))
-      at.set(offset, model.sample(t + offset, hr, modifiers, beatIndex));
+    if (!at.has(offset)) {
+      let time = t + offset,
+        beat = beatIndex;
+      if (planned && time >= L) {
+        time -= L;
+        beat++;
+      } else if (planned && time < 0 && beat > 0) {
+        beat--;
+        time += model.cycleDuration(hr, beat);
+      }
+      at.set(offset, model.sample(time, hr, modifiers, beat));
+    }
     return at.get(offset);
   };
   const out = {};
