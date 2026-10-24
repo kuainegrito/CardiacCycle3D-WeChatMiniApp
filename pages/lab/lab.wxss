@@ -200,14 +200,19 @@
 .shunt-note { display: flex; align-items: flex-start; gap: 6px; padding: 6px 12px 2px; font-size: 10px; line-height: 14px; color: #94a5bf; }
 .shunt-note .key-dot { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; flex: none; background: #ffffff; box-shadow: 0 0 5px #8fb8e8; }
 .shunt-note.asd .key-dot { background: #ff8a70; box-shadow: 0 0 5px #ff8a70; }
-/* CC-60: the ectopic stimulus (website CC-58). */
-.stimulus-row { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin: 0 16px 6px; }
-.stimulus-row .vulnerable { font-size: 11px; }
-.stimulus-button.shock { background: rgba(232,163,61,0.35); }
+/* CC-60/64: the ectopic stimulus, vulnerable period and AED in the heart's bottom-right corner
+   (2026-10-24): above the orientation mark, and above the wall slider on the 3D heart. */
+.ectopy-dock { position: absolute; right: 8px; bottom: 30px; left: 10px; z-index: 6; display: flex; flex-direction: row-reverse; flex-wrap: wrap-reverse; justify-content: flex-start; align-items: center; gap: 4px; }
+.ectopy-dock.above-slider { bottom: 52px; }
+.chip { display: flex; align-items: center; gap: 4px; font-size: 10px; line-height: 14px; padding: 4px 7px; border-radius: 999px; color: #e9effa; background: rgba(8,18,34,0.85); border: 1px solid rgba(232,163,61,0.75); }
+.chip.stim { font-size: 11px; font-weight: 700; background: rgba(232,163,61,0.22); }
+.chip.shock { font-weight: 700; background: rgba(232,163,61,0.55); }
+.chip.toggle { border-color: rgba(120,168,226,0.45); color: #94a5bf; }
+.chip.toggle.on { color: #e9effa; border-color: #e8a33d; }
+.chip .check { width: 12px; height: 12px; line-height: 12px; font-size: 9px; }
+.chip.off { opacity: 0.45; }
 .ectopy-result.aed { color: #e9effa; }
-.stimulus-button { border: 1px solid #e8a33d; border-radius: 999px; background: rgba(232,163,61,0.12); color: #e9effa; font-size: 12px; font-weight: 600; padding: 5px 12px; }
-.stimulus-button.off { opacity: 0.45; }
 .ectopy-result { font-size: 11px; line-height: 16px; color: #94a5bf; padding: 0 16px 8px; }
 .ectopy-result.pvc { color: #e9effa; }
 .ectopy-result.refractory { color: #e8a33d; }
-.rhythm-strip { width: 100%; height: 380px; display: block; }
+.rhythm-strip { width: 100%; height: 250px; display: block; }

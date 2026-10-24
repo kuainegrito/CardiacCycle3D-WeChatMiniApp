@@ -41,7 +41,7 @@ function lab() {
     },
     async bindCanvas(id) {
       bound.push(id);
-      const size = { strips: [360, 412], pv: [330, 240], ap: [360, 350], chestStrips: [360, 420], chestDiagram: [132, 118], rhythmStrip: [360, 380] }[id] ?? [100, 100];
+      const size = { strips: [360, 412], pv: [330, 240], ap: [360, 350], chestStrips: [360, 420], chestDiagram: [132, 118], rhythmStrip: [360, 250] }[id] ?? [100, 100];
       return (this.canvases[id] = { node: node(...size), w: size[0], h: size[1] });
     },
   };
@@ -314,4 +314,55 @@ test("CC-61: a stimulus at t = 0 plays on, and the strip's shortened beat ends a
   const beat = page.rhythm.beats.get(b);
   assert.ok(Math.abs(beat.T - c) < 1e-6);
   assert.ok(beat.rows.at(-1).t <= c + 1e-6 && beat.rows.every((r) => r.t <= c + 1e-6), "no rows past the stimulus");
+});
+
+// 2026-10-24: the stimulus, vulnerable period and AED sit in the heart's
+// corner, and both say what they are waiting for.
+test("the stimulus, vulnerable switch and AED are in the heart's corner, not above the traces", async () => {
+  const wxml = await readFile("pages/lab/lab.wxml", "utf8");
+  const stage = wxml.slice(wxml.indexOf('<template name="stage">'), wxml.indexOf("</template>")),
+    wiggers = wxml.slice(wxml.indexOf('class="panel wiggers-panel"'), wxml.indexOf('class="panel pv-panel"'));
+  for (const handler of ["stimulate", "toggleVulnerable", "analyzeAed", "deliverShock"]) {
+    assert.match(stage, new RegExp(`catchtap="${handler}"`), handler);
+    assert.doesNotMatch(wiggers, new RegExp(`tap="${handler}"`), handler);
+  }
+  assert.match(stage, /class="viewport"[\s\S]*class="ectopy-dock/);
+  const uses = wxml.match(/<template is="stage" data="\{\{[^}]*\}\}"\/>/g);
+  assert.equal(uses.length, 2);
+  for (const use of uses) for (const key of ["stimulusDisabled", "vulnerable", "aedStatus"]) assert.ok(use.includes(key), key);
+  const wxss = await readFile("pages/lab/lab.wxss", "utf8");
+  assert.match(wxss, /\.rhythm-strip \{[^}]*height: 250px/);
+});
+
+test("the vulnerable switch says where its window is; a miss says so; the AED says why it advises no shock", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { page } = await open("normal");
+  page.clock.playing = false;
+  page.clock.seek(100);
+  page.toggleVulnerable();
+  const peak = page.vulnerablePeak();
+  assert.ok(peak > 300 && peak < 500, String(peak));
+  assert.match(page.data.ectopyText, new RegExp(`易损期已开.*约 ${peak} ms`));
+  // A press outside the window: an ordinary premature beat, and the line says it missed.
+  pauseAt(page, 0.6);
+  page.stimulate();
+  assert.equal(page.data.ectopyOutcome, "pvc");
+  assert.match(page.data.ectopyText, /没落在易损窗口/);
+  // The AED in sinus rhythm or a premature beat: no shock, and why.
+  page.analyzeAed();
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "notAdvised");
+  assert.match(page.data.aedText, /AED 只在心室颤动时建议电击，现在是(窦性节律|期前收缩)/);
+  assert.match(page.data.aedText, /选「心室颤动」情景/);
+  // At the peak of a fresh beat: fibrillation, and then the AED advises a shock.
+  page.onHR({ detail: { value: 75 } });
+  page.toggleVulnerable();
+  page.clock.playing = false;
+  page.clock.seek(page.vulnerablePeak());
+  page.stimulate();
+  assert.equal(page.data.ectopyOutcome, "vf");
+  assert.doesNotMatch(page.data.ectopyText, /没落在易损窗口/);
+  page.analyzeAed();
+  t.mock.timers.tick(2000);
+  assert.equal(page.data.aedStatus, "advised");
 });

@@ -65,6 +65,13 @@ const AUTHOR = { name: "于快", email: "yukuai@gmc.edu.cn", site: "https://www.
 // Mini program wording that differs from the website (owner, 2026-10-09).
 const OVERRIDES = {
   zh: {
+    // 2026-10-24: what the vulnerable-period switch and the AED are waiting for.
+    vulnerableOn: "易损期已开：只有在 T 波顶峰前后 20 ms（本拍约 {t} ms）点 ⚡ 才会诱发室颤。可先暂停，把时间轴拖到该时刻再点。",
+    vulnerableMissed: "（这次没落在易损窗口：T 波顶峰约 {t} ms，前后 20 ms。）",
+    aedWhy: "AED 只在心室颤动时建议电击，现在是{rhythm}。要练习电击：选「心室颤动」情景，或打开易损期后在 T 波顶峰点 ⚡。",
+    rhythmSinus: "窦性节律",
+    rhythmPvc: "期前收缩",
+    rhythmAsystole: "电击后电静止",
     // The share card title (the website dropped this banner line on 2026-10-10).
     title: "一次心跳，贯通所有联系。",
     heartAtlas: "三维心脏",
@@ -95,6 +102,14 @@ const OVERRIDES = {
     copyFailed: "请长按文字复制",
   },
   en: {
+    // The heart corner is narrow on a phone (the website says "⚡ Ectopic stimulus").
+    ectopicStimulus: "⚡ Stimulus",
+    vulnerableOn: "Vulnerable period on: only a ⚡ within 20 ms of the T-wave peak (about {t} ms in this beat) starts ventricular fibrillation. Pause and drag the time bar to that moment first.",
+    vulnerableMissed: " (This one missed the vulnerable window: T-wave peak about {t} ms, ± 20 ms.)",
+    aedWhy: "The AED advises a shock only in ventricular fibrillation; this is {rhythm}. To practise a shock, choose the ventricular fibrillation scenario, or turn on the vulnerable period and press ⚡ at the T-wave peak.",
+    rhythmSinus: "sinus rhythm",
+    rhythmPvc: "a premature beat",
+    rhythmAsystole: "the post-shock electrical silence",
     title: "One heartbeat. Every connection.",
     heartAtlas: "3D heart",
     audioUnavailable: "Cannot play heart sounds. Check device sound settings or update WeChat.",
@@ -716,6 +731,7 @@ Page({
       text = t({ "atrial-fibrillation": "ectopyDisabledAf", "complete-block": "ectopyDisabledBlock" }[reason] ?? "ectopyDisabledOther");
       outcome = "disabled";
     } else if (!this.ectopyResult && this.model.patch?.vf) text = t("aedVf");
+    else if (!this.ectopyResult && this.data.vulnerable) text = fill(t("vulnerableOn"), { t: this.vulnerablePeak() });
     else if (this.ectopyResult) {
       const { result: r, summary: s, notes } = this.ectopyResult;
       outcome = r.outcome;
@@ -726,6 +742,9 @@ Page({
       else if (r.outcome === "refractory") text = fill(t("ectopyRefractory"), { t: Math.round(r.tMs), erp: Math.round(r.erpMs) });
       else if (r.reason === "rhythm") text = t("aedVf");
       else text = fill(t("ectopyOnePerCycle"), { t: Math.round(r.tMs) });
+      // With the vulnerable period on, a stimulus that did not start VF says where the window was.
+      if (this.data.vulnerable && (r.outcome === "pvc" || r.outcome === "refractory"))
+        text += fill(t("vulnerableMissed"), { t: this.vulnerablePeak(r.beat) });
       text += notes.map(t).join("");
     }
     this.setData({ ectopyText: text, ectopyOutcome: outcome, stimulusDisabled: !!reason });
@@ -743,6 +762,13 @@ Page({
   // A scenario, rate or loading change (resetEctopy) or a new stimulus cancels it.
   toggleVulnerable() {
     this.setData({ vulnerable: !this.data.vulnerable });
+    // The result line now says where the window is (renderEctopyResult).
+    this.ectopyResult = null;
+    this.renderEctopyResult();
+  },
+  // The T-wave peak of this beat (ms): the middle of the vulnerable window.
+  vulnerablePeak(beat = this.clock.beatIndex) {
+    return Math.round(this.model.ectopy.vulnerablePeak(beat, this.clock.hr));
   },
   analyzeAed() {
     if (this.aed?.status === "analyzing") return;
@@ -759,7 +785,12 @@ Page({
       const now = this.model;
       if (token !== this.aedToken || now !== model || now.ectopy.version !== version) return this.resetAed();
       const c = this.clock;
-      this.aed = { status: now.ectopy.rhythmAt(c.beatIndex, c.t, c.hr) === "vf" ? "advised" : "notAdvised" };
+      const rhythm = now.ectopy.rhythmAt(c.beatIndex, c.t, c.hr);
+      // Not advised: say what the rhythm is, and how to reach one that is.
+      this.aed = {
+        status: rhythm === "vf" ? "advised" : "notAdvised",
+        rhythm: rhythm === "asystole" ? "rhythmAsystole" : now.sample(c.t, c.hr, this.modifiers, c.beatIndex).ectopy?.kind === "pvc" ? "rhythmPvc" : "rhythmSinus",
+      };
       this.renderAed();
     }, 2000);
   },
@@ -790,7 +821,8 @@ Page({
   renderAed() {
     const status = this.aed?.status ?? "idle",
       key = { analyzing: "aedAnalyzing", advised: "aedAdvised", notAdvised: "aedNotAdvised", shock: "aedSuccess" }[status];
-    const aedText = key ? i18n.t(key) + " " + i18n.t("aedDisclaimer") : "";
+    const why = status === "notAdvised" && this.aed?.rhythm ? " " + i18n.t("aedWhy").replace("{rhythm}", i18n.t(this.aed.rhythm)) : "",
+      aedText = key ? i18n.t(key) + why + " " + i18n.t("aedDisclaimer") : "";
     if (aedText !== this.data.aedText || status !== this.data.aedStatus) this.setData({ aedStatus: status, aedText });
   },
   setChestMode(e) {
