@@ -93,6 +93,7 @@
 - 2026-10-23（二）（同步网站 CC-61 修复，`claude/cc57-ectopy-engine` 的 `81218f29`）：关闭「循环」时点 ⚡，期前收缩、代偿间歇和间歇后增强的一拍照常播放，停在间歇后那一拍末尾（原先时钟停在刺激时刻）；点 ⚡ 后不再卡一下：心脏在刺激时刻停几帧，期前拍分帧预备好再继续；期前拍与间歇后拍的二维充盈、三维流入按本拍计算。由 Claude 按负责人指示实施；未上传微信。
 - 2026-10-23（三）（同步网站 CC-63/64 与卡死修复，`claude/cc57-ectopy-engine` 的 `d11e5885`）：心室颤动与 AED；修复点 ⚡ 后可能卡死（射血期或拍首 t = 0 刺激时三维心脏抛错，整页停住）和节律条两拍重叠。情景列表新增「心室颤动」；「易损期」开关打开时，在 T 波顶峰 ±20 ms 点 ⚡ 会诱发室颤；「AED」分析约 2 秒，室颤才建议电击，出现「⚡ 电击」；首次电击即成功（演示），电静止 1.5 秒后窦性恢复。节律条、二维心脏（心室微颤、无序小波）与三维心脏（心室着色器微动、传导视图的无序小波）都直接用网站代码。结果行注明「原理演示，不是 AED 操作培训」。由 Claude 按负责人指示实施；未上传微信。
 - 2026-10-24（同步网站 `403cb13e`）：点「⚡ 异位刺激」后的停顿明显缩短（期前拍预备耗时约减半，等待期间每帧多做一些，按下时不强制三维走一步）；期前拍末尾二维/三维二尖瓣不再提前关。由 Claude 按负责人报告修复；未上传微信。
+- 2026-10-24（二）（同步网站 `6de28cc8`）：期前收缩的收缩更自然——期前拍开始时三维心室不再一帧弹回、不射血的期前拍也有等容收缩、右室先收缩左室约晚 50 ms；束支阻滞时期前拍开头左室容积不再跳变。由 Claude 按负责人要求实施；未上传微信。
 
 ## 与网站的差异
 
@@ -320,4 +321,12 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - 网站引擎（同步带来）：期前拍、间歇后拍的回看改用本拍整毫秒压力表，压力与开闭判定不变，预备耗时约减半；另含 R3（回放时心房容积）与 R4（期前拍末尾瓣膜开度跨拍前看，二维与三维同一规则）。
 - 实验室页：等待期间每帧预备 20 ms（原 12 ms）；按下时只刷新读数，不强制三维立即走一步。
 - 量测（用小程序自己的页面代码与三维视图的预备网格，每帧另有 33 ms 工作，桌面 Node 模拟）：等待 75 次/分 0.53 s → 0.17 s、40 次/分 1.25 s → 0.23 s（无 JIT）；有 JIT 时 0.10 s；按下本身 4–13 ms。真机会更慢，未测。
+- 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 40/40；`check-stimulus-bundle`、`check-vf-bundle`、`check-ectopy-bundle`、`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。未上传。
+
+### 2026-10-24（二）：期前收缩的收缩过程（网站 CC-61）
+
+模型：Anthropic Claude Code (Claude Desktop) / Claude Opus 5.5 (`claude-opus-5-5`)。负责人：「还需要继续工作吗？如果需要请继续，让确保期前收缩的收缩符合收缩逻辑，看着自然。」由 Claude 实施。网站来源：`claude/cc57-ectopy-engine` 的 `6de28cc8`（网站记录 `docs/CC61_PVC_MOTION.md`）。
+
+- 同步：`engine/ectopy.js`（期前拍样本带被截短一拍的舒张时相 `relaxing`、收缩力 `ectopy.contraction`、左室延迟）、`engine/ventricular-timing.js`（有拍计划时延迟读取跨到上一拍 `delayedInstant`）、`engine/atrial-targets.js`（同）；`vendor/atlas3d.js` 重新打包（网站 `loading-response.js`、`regional-motion.js`、管线取两者较大的收缩权重；模型文件名不变）。实验室页没有改。
+- 新增检查：`tools/check-stimulus-bundle.mjs` 在实际三维包里检查射血期刺激时期前拍开始处收缩权重不跳变（最大一步 0.010，原先 0.95 → 0）、不射血的期前拍自身收缩 0.23。
 - 验证：`CARDIAC_WEB=<网站分支工作树> node --test tools/*.test.mjs` 40/40；`check-stimulus-bundle`、`check-vf-bundle`、`check-ectopy-bundle`、`check-chord-insertions`、`check-pfo-bundle`、`check-scenario-switch` 通过。未上传。

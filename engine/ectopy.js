@@ -61,6 +61,11 @@ export const vfVoltage = (absoluteMs) => {
 // at t = 0 left a beat of zero length, whose per-beat tables (atrial volume)
 // cannot be built; such a stimulus lands 1 ms into the beat instead.
 export const MIN_CUT_MS = 1;
+// The 3D contraction envelope rests by reference time 650 (atlas-motion.js);
+// a cut beat's relaxation is carried until then, at its latest region (the
+// regions' activation spreads ~55 ms apex to base, plus electromechanical delay).
+const RELAXED_REF = 700,
+  RELAX_SPREAD_MS = 80;
 export const ECTOPY_DEFAULTS = Object.freeze({
   site: "rv",
   // Stimulus to ventricular excitation (ms), and the PVC's QRS width before
@@ -462,8 +467,34 @@ export function createEctopy(host) {
         fade0: Math.max(sysEnd, L - (T - oldSch[5].start)),
         ref,
         onT: c >= sinusTiming.qrsStart && c - sinusTiming.qrsStart <= sinusTiming.qtMs,
+        ...relaxation(desc, hr, modifiers, own),
+        ...lvLag(sch, L, rs, sinusTiming),
       };
     });
+  }
+
+  // CC-61: the cut beat's own contraction does not stop at the stimulus: it
+  // relaxes on (the engine's volumes already follow it until the PVC's
+  // mechanical onset). The 3D walls take the larger of that relaxation and the
+  // PVC's contraction (sample.relaxing), so they never snap between shapes.
+  // A PVC that takes this beat's own QRS cuts it before it contracted.
+  function relaxation(desc, hr, modifiers, own) {
+    if (own) return { relaxes: false };
+    const old = desc.old,
+      pv = host.pressureVolume(0, hr, modifiers, old.sinus),
+      q = old.kind === "post" ? postQ(old, hr, modifiers) : null;
+    return { relaxes: true, oldEdv: pv.edv + (q ? q.start.volume : 0), oldEsv: pv.esv + (q ? q.dES : 0) };
+  }
+  // CC-61: an RV ectopic beat reaches the LV last (the wide, LBBB-like QRS),
+  // so the LV contracts later than the RV by the QRS's extra width. The lag
+  // grows at half the clock's speed from the stimulus and fades out in the
+  // pause after rapid filling, where the volume is flat, so no ventricle's
+  // time ever runs backwards or jumps at either end.
+  function lvLag(sch, L, rs, sinusTiming) {
+    const lag = Math.max(0, (D.qrsMs - phys.qrsMs) * sinusTiming.qrsScale),
+      fadeMs = Math.max(3 * (lag + 60), 150 * rs),
+      fade0 = Math.max(0, Math.min(sch[5].end, L - 1 - fadeMs));
+    return { lag, lagFade0: fade0, lagFadeMs: fadeMs };
   }
 
   // Volume and pressures of any described beat at time t (t < 0 is the
@@ -776,8 +807,33 @@ export function createEctopy(host) {
               (patch.murmurGain ?? 1)
             : 0,
       };
-    const conduction = sampleConduction(time, L, timing, patch, absolute),
-      preload = clamp(modifiers.preload ?? 1, 0.7, 1.4),
+    const conduction = sampleConduction(time, L, timing, patch, absolute);
+    // The LV's lag behind the RV (lvLag); a bundle branch block's own delay
+    // stays the floor, so a block keeps its timing across the beat's ends.
+    const lagTarget = Math.max(conduction.leftDelay, conduction.rightDelay + p.lag) - conduction.leftDelay;
+    if (lagTarget > 0)
+      conduction.leftDelay += Math.min(
+        0.5 * time,
+        lagTarget * (1 - smooth(clamp((time - p.lagFade0) / p.lagFadeMs, 0, 1))),
+      );
+    // The cut beat's relaxation, while its walls are still contracted: judged
+    // at its latest region (a branch delay plus the apex-to-base spread).
+    const relaxT = p.c + time,
+      oldConduction = p.relaxes && relaxT < p.T ? sampleConduction(relaxT, p.T, sinusTiming, patch, absolute) : null,
+      latest = oldConduction ? relaxT - Math.max(oldConduction.leftDelay, oldConduction.rightDelay) - RELAX_SPREAD_MS : 0,
+      relaxing =
+        oldConduction && (latest < 0 || refTime(p.oldSch, latest) < RELAXED_REF)
+          ? {
+              t: relaxT,
+              T: p.T,
+              schedule: p.oldSch,
+              referenceTime: refTime(p.oldSch, relaxT),
+              conduction: oldConduction,
+              edv: p.oldEdv,
+              esv: p.oldEsv,
+            }
+          : null;
+    const preload = clamp(modifiers.preload ?? 1, 0.7, 1.4),
       afterload = clamp(modifiers.afterload ?? 1, 0.7, 1.5),
       contractility = clamp(modifiers.contractility ?? 1, 0.6, 1.6);
     return {
@@ -812,6 +868,7 @@ export function createEctopy(host) {
         volumeIntercept: D.volumeIntercept,
       },
       atrialKick: 0,
+      ...(relaxing && { relaxing }),
       ectopy: info(desc, hr, p),
     };
   }
@@ -829,6 +886,9 @@ export function createEctopy(host) {
       strength: p.strength,
       blocks: desc.event.blocks,
       mechanicalOnsetMs: p.onset,
+      // Contraction vigour relative to a sinus beat (elastance x filling):
+      // the 3D walls' amplitude, so a PVC that cannot eject still contracts.
+      contraction: p.rho,
       ejected: p.ejected,
       onT: p.onT,
     };

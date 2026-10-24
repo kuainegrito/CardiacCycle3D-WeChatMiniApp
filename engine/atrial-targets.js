@@ -14,6 +14,7 @@
 // mean atrial pressure above the normal model. A teaching choice, not measured
 // atrial volumes or a haemodynamic solver.
 import { createModel } from "./waveforms.js";
+import { delayedInstant } from "./ventricular-timing.js";
 
 const SIDES = ["LA", "RA"];
 const REGURGITANT_VALVE = { LA: "mitral", RA: "tricuspid" };
@@ -290,18 +291,21 @@ export function atrialVolumeTargets(
   const { leftDelay = 0, rightDelay = 0 } = sample.conduction ?? {};
   const out = {};
   for (const side of SIDES) {
-    const delay = side === "LA" ? leftDelay : rightDelay,
-      time = t - delay,
-      { base, dip } = table.sides[side];
+    const delay = side === "LA" ? leftDelay : rightDelay;
+    // CC-61: with an ectopic plan a delayed instant before this beat's start
+    // is read in the beat before (ventricular-timing.js delayedInstant).
+    const [time, beat] = delay ? delayedInstant(model, t - delay, hr, beatIndex) : [t, beatIndex],
+      own = beat === beatIndex ? table : atrialBeatTable(model, hr, modifiers, beat, settings),
+      { base, dip } = own.sides[side];
     const shifted = delay
-      ? model.sample(time, hr, modifiers, beatIndex)
+      ? model.sample(time, hr, modifiers, beat)
       : sample;
     out[side] =
       targets.normalMaximumMl[side] +
       targets.complianceMlPerMmHg * offsets[side] +
-      interpolate(table, base, time) -
-      base[table.openIndex] +
-      interpolate(table, dip, time) -
+      interpolate(own, base, time) -
+      base[own.openIndex] +
+      interpolate(own, dip, time) -
       dissociatedDipMl(shifted, physiology, targets);
   }
   return out;
