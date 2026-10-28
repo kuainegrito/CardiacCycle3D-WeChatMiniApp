@@ -117,3 +117,10 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 
 - 所有者确认传导动画及收缩期末梢外观，按指令将 `codex` 合并并推送至小程序默认分支 `main`（本仓库使用 `main`，不是 `master`），功能提交 `2e4a3b53a7b268ae621bfad83a3c498e1fb00f25`。
 - 网站对应功能已部署 VPS，线上传导与浏览器冒烟检查通过。小程序代码已集成；本次未上传或发布微信小程序。
+
+
+### 2026-10-28：开发分支公开资源路径同步
+
+- 本分支资源与构建工具改用 `https://www.kuaiyu.site/apps/cardiac_cycle/`，旧模型 URL 仍兼容。
+- 仅逐字节替换公开 URL 前缀，不从 main 同步模型或三维实现；反向替换与原字节一致。AppID、project.config.json、app.json、sitemap.json 保持原哈希；原本没有的私人配置文件保持不存在。
+- 本轮为分支路由同步，未上传或发布微信小程序，真机验收继续按原流程执行。
