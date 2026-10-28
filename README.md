@@ -1,6 +1,6 @@
 # CardiacCycle 3D · 微信小程序
 
-心动周期教学模型 [kuaiyu.site/cardiac_cycle](https://www.kuaiyu.site/cardiac_cycle/) 的微信小程序版。小程序直接运行网站本身的代码：生理模型、二维心脏、同步曲线和三维心脏都与网站同源，只外加一层小程序适配。
+心动周期教学模型 [kuaiyu.site/apps/cardiac_cycle](https://www.kuaiyu.site/apps/cardiac_cycle/) 的微信小程序版。小程序直接运行网站本身的代码：生理模型、二维心脏、同步曲线和三维心脏都与网站同源，只外加一层小程序适配。
 
 ## 目录结构
 
@@ -342,3 +342,11 @@ MIT，见 [LICENSE](LICENSE)。心脏网格来自 Z-Anatomy / BodyParts3D（CC B
 - **AED 为什么总说不建议电击**：AED 只在心室颤动时建议电击，窦性节律和期前收缩本来就不该电击。现在不建议时说明当前是窦性节律/期前收缩/电击后电静止，并提示：选「心室颤动」情景，或打开易损期后在 T 波顶峰点 ⚡。
 - 测试：`tools/ectopy.test.mjs` 新增 2 项（按钮在心脏模板里、两份模板都传入状态、节律条 250 px；易损期说明含本拍 T 波顶峰时刻、未命中提示、命中诱发室颤后 AED 建议电击、不建议时的原因）。`CARDIAC_WEB=<网站工作树> node --test tools/*.test.mjs` 42/42。
 - 未验证：微信开发者工具与真机（实际字体下按钮宽度、三维画布上按钮的点按）；未上传。
+
+
+## 2026-10-28：同步网站规范路径
+
+- 三维模型与内容 URL 改为 `https://www.kuaiyu.site/apps/cardiac_cycle/`；模型哈希文件名保持不变。构建工具、生成 stub、生成 vendor 中的 URL 同步调整，网站旧资源地址继续兼容。
+- 生成的三维包仅替换一个 URL，未重新同步网站分支的模型、三维实现或参数；逐字节反向替换与备份一致。
+- AppID、项目/私人配置、app.json 与 sitemap.json 的 SHA-256 保持不变，合法域名仍为原 www 域名。
+- 原有 42/42 测试通过；公开新旧模型下载 SHA-256 一致。微信开发者工具真机预览、审核及发布由所有者继续完成。
