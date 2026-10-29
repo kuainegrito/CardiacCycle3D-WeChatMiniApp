@@ -95,6 +95,8 @@ const OVERRIDES = {
     atlasNoWebgl: "此设备的微信无法提供 WebGL2，暂时只能使用二维心脏。",
     atlasLost: "图形环境被系统中断，请重试。",
     reason: "原因",
+    webVersion: "网页版请访问",
+    modelNotice: "理想化教学模型，不针对个体患者，不能用于诊断或临床决策。心脏采用修改后的 Z-Anatomy 图谱（CC BY-SA）及原创二维图示；心腔、瓣膜和运动均为示意，具体容积、压力和射血分数请以曲线和读数为准。",
     authorEmail: "邮箱",
     authorSite: "个人网站",
     copyHint: "点击复制邮箱或网址，也可长按选择文字。",
@@ -132,6 +134,8 @@ const OVERRIDES = {
     atlasNoWebgl: "WeChat on this device has no WebGL2; only the 2D heart is available.",
     atlasLost: "The graphics context was interrupted. Please try again.",
     reason: "Reason",
+    webVersion: "Web version",
+    modelNotice: "Idealized teaching model, not patient-specific or for clinical decisions. The heart uses a modified Z-Anatomy atlas (CC BY-SA) and an original 2D drawing. Chambers, valves and motion are illustrative; use the curves and readouts for volume, pressure and ejection fraction.",
     authorEmail: "Email",
     authorSite: "Website",
     copyHint: "Tap to copy the email or address, or long-press to select it.",
@@ -194,7 +198,7 @@ const TEXT_KEYS = [
   "tabRhythm", "ectopicStimulus", "rhythmNote",
   // CC-64 (website): the AED and the vulnerable-period switch.
   "aedButton", "aedShock", "aedAnalyzing", "aedVulnerable",
-  "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "validationNote", "motionNote", "open", "closed",
+  "atlasLoading", "atlasStandby", "wallOpacity", "wallOriginContext", "institution", "authorEmail", "authorSite", "copyHint", "currentValues", "valuesHint", "close", "welcome", "helpText", "modelNotice", "webVersion", "open", "closed",
 ];
 
 Page({
@@ -204,6 +208,7 @@ Page({
     langButton: "EN",
     version: VERSION,
     author: AUTHOR,
+    webUrl: "https://www.kuaiyu.site/apps/cardiac_cycle/",
     panel: "heart", // mobile tab: heart | phases
     pinned: true,
     docked: true, // pinned heart shown above the scroll area (the 3D heart is always docked)

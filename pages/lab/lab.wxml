@@ -222,8 +222,8 @@
         </block>
         <block wx:else>
           <view class="dialog-p">{{t.helpText}}</view>
-          <view class="notice flush">{{t.validationNote}}</view>
-          <view class="notice flush">{{t.motionNote}}</view>
+          <view class="notice flush">{{t.modelNotice}}</view>
+          <view class="web-version" data-copy="{{webUrl}}" bindtap="copyText"><text>{{t.webVersion}} </text><text class="web-link" user-select>{{webUrl}}</text></view>
           <view class="author">
             <view class="author-row"><text class="author-k">{{t.institution}}</text><text class="author-v" user-select>{{author.name}}</text></view>
             <view class="author-row" data-copy="{{author.email}}" bindtap="copyText"><text class="author-k">{{t.authorEmail}}</text><text class="author-v link" user-select>{{author.email}}</text></view>

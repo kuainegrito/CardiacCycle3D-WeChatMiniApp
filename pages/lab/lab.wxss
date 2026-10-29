@@ -216,3 +216,6 @@
 .ectopy-result.pvc { color: #e9effa; }
 .ectopy-result.refractory { color: #e8a33d; }
 .rhythm-strip { width: 100%; height: 250px; display: block; }
+
+.web-version { margin-top: 12px; font-size: 12px; line-height: 1.6; color: #c7d6ea; word-break: break-all; }
+.web-link { color: #45c8f5; }
