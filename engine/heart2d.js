@@ -1,6 +1,6 @@
 // Copied by tools/sync-from-web.mjs from js/heart2d.js; only this line is added (and any stylesheet import removed).
 import { document } from "./mp-dom.js";
-import { vfOffset } from './vf-view.js';
+import { rhythm2dMotion, rhythm2dPoint, rhythm2dCue } from './heart2d-rhythm.js';
 import { Conduction2D } from "./heart2d-conduction.js";
 // CC-30: the 2D heart. An original frontal-section drawing in the style of the
 // classic textbook animation the owner sent (a GIF of unknown licence: nothing
@@ -411,6 +411,7 @@ export function heart2dState({
   return {
     s,
     volumes,
+    rhythmMotion: rhythm2dMotion(sample),
     // CC-45: what is drawn keeps the leak gap and the stiff stenotic opening.
     valves: diseasedValveBlends(
       valveBlends(model, sample, t, hr, modifiers, beatIndex),
@@ -438,12 +439,11 @@ export function heart2dGeometry({
   interatrial = null,
   filling = null,
   vfTime = null,
+  rhythmMotion = vfTime === null ? null : { absolute: vfTime, vf: 1 },
 }) {
   const at = (point) => {
     const xy = place(point, s);
-    if (vfTime === null || xy[1] < 450) return xy;
-    const jitter = vfOffset(xy[0], xy[1], vfTime, 1.7);
-    return xy.map((v,i) => v+jitter[i]);
+    return rhythm2dPoint(xy, point.driver, rhythmMotion);
   };
   const muscles = Object.fromEntries(
     Object.entries(MUSCLES).map(([id, m]) => {
@@ -451,8 +451,8 @@ export function heart2dGeometry({
       return [
         id,
         {
-          base: mix(m.small[0], m.large[0], k),
-          tip: mix(m.small[1], m.large[1], k),
+          base: rhythm2dPoint(mix(m.small[0], m.large[0], k), m.driver, rhythmMotion),
+          tip: rhythm2dPoint(mix(m.small[1], m.large[1], k), m.driver, rhythmMotion),
         },
       ];
     }),
@@ -1445,6 +1445,9 @@ export class Heart2DView {
     );
     cuspGroup("pulmonary", rootBox);
     this.conductionView = new Conduction2D(svg, el);
+    this.rhythmCue = el("g", { "data-rhythm-cue": "", display: "none", "pointer-events": "none" }, svg);
+    el("rect", { x: 70, y: 724, width: 500, height: 42, rx: 18, fill: "#102037", opacity: 0.94 }, this.rhythmCue);
+    this.rhythmText = el("text", { x: 320, y: 752, "text-anchor": "middle", "font-family": "system-ui, sans-serif", "font-size": 22, "font-weight": 600, fill: "#ffe88a" }, this.rhythmCue);
     // Labels: short, light, never in the way of the valves.
     this.text = el(
       "g",
@@ -1647,8 +1650,10 @@ export class Heart2DView {
       ...frame,
       atrialSettings: this.atrialSettings,
     });
-    this.state.vfTime = frame.sample?.conduction?.rhythm === "vf" ? frame.sample.absolute : null;
-    this.svg.dataset.rhythm = frame.sample?.conduction?.rhythm ?? "sinus";
+    this.svg.dataset.rhythm = frame.sample?.conduction?.rhythm ?? (frame.sample?.conduction?.fibrillating ? "af" : frame.sample?.ectopy?.kind ?? "sinus");
+    const cue = this.quiet ? "" : rhythm2dCue(frame.sample, this.language);
+    this.rhythmCue.setAttribute("display", cue ? "inline" : "none");
+    this.rhythmText.textContent = cue;
     const g = (this.geometry = heart2dGeometry(this.state));
     this.conductionView.update(frame.sample?.conduction, this.state.s, g.shell, frame.sample?.absolute);
     this.shell.setAttribute("d", g.shell);
@@ -1704,7 +1709,7 @@ export class Heart2DView {
     const phase = frame.sample?.phase?.name;
     const key = `${phase?.en}|${Object.values(this.state.valves)
       .map((b) => b > 0.5)
-      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}`;
+      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}|${cue}`;
     if (key !== this.described) this.describe();
   }
 
@@ -1868,7 +1873,7 @@ export class Heart2DView {
     this.svg.dataset.openValves = open.join(" ");
     this.described = `${phase?.en}|${Object.values(this.state.valves)
       .map((b) => b > 0.5)
-      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}`;
+      .join()}|${this.state.leak > 0.02}|${this.state.interatrial?.open ?? ""}|${rhythm2dCue(this.frame.sample, this.language)}`;
     const pfo = this.state.interatrial;
     const pfoText = !pfo
       ? ""
@@ -1894,6 +1899,8 @@ export class Heart2DView {
     this.desc.textContent = zh
       ? `${phase?.zh ?? ""}。开放的瓣膜：${names.join("、") || "无"}。${leak ? "血液经二尖瓣反流入左心房。" : ""}${pfoText}黄色脉冲显示电传导。心腔大小随模型容积变化。`
       : `${phase?.en ?? ""}. Open valves: ${names.join(", ") || "none"}. ${leak ? "Blood leaks back through the mitral valve into the left atrium. " : ""}${pfoText}Yellow pulses show electrical conduction. Chamber sizes follow the model volumes.`;
+    const rhythm = rhythm2dCue(this.frame.sample, this.language);
+    if (rhythm) this.desc.textContent += ` ${rhythm}.`;
   }
 
   // The lab's 3D interface, where it applies to a drawing.

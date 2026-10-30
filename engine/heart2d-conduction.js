@@ -195,6 +195,16 @@ for (const [chamber, paths] of [
   points: points.map(([x, y]) => p(x, y, chamber, chamber === "RA" ? -8 : 4, -5)),
 }));
 
+// VF fronts are fragmented myocardial paths, not a coordinated sweep down
+// the normal His-Purkinje network. Keep them within the ventricular shell.
+for (const [chamber, paths] of [
+  ["RV", [[[150, 541], [181, 572], [219, 596]], [[253, 622], [289, 642], [326, 655]], [[350, 649], [389, 669], [427, 671]]]],
+  ["LV", [[[514, 431], [535, 471], [547, 512]], [[554, 546], [557, 588], [547, 628]], [[529, 654], [503, 672], [471, 679]]]],
+]) paths.forEach((points, i) => routes.push({
+  id: `vf-${chamber}-${i}`, clock: "vf", start: i * 2.1 + (chamber === "LV" ? 1.2 : 0),
+  points: points.map(([x, y]) => p(x, y, chamber, chamber === "RV" ? -6 : 25, 12)),
+}));
+
 export function conduction2dState(conduction, s = {}, absolute = conduction?.absolute ?? 0) {
   if (!conduction) return null;
   const c = conduction;
@@ -225,9 +235,14 @@ export function conduction2dState(conduction, s = {}, absolute = conduction?.abs
     },
     routes: routes
       .filter((r) => (r.clock !== "accessory" || c.accessory) && (r.clock !== "ectopic" || ectopic) &&
+        (r.clock !== "vf" || c.rhythm === "vf") &&
         (r.clock !== "fibrillatory" || (c.fibrillating && !["vf", "asystole"].includes(c.rhythm))))
       .map((r) => {
-        const points = r.points.map((v) => locate(v, s));
+        const disordered = r.clock === "fibrillatory" || r.clock === "vf";
+        const points = r.points.map((v, i) => {
+          const xy = locate(v, s);
+          return disordered ? xy.map((value, axis) => value + 3 * Math.sin(absolute * .025 + r.start + i * 1.8 + axis * 2.1)) : xy;
+        });
         const age =
           r.clock === "atrial"
             ? atrialAge
@@ -261,10 +276,10 @@ export function conduction2dState(conduction, s = {}, absolute = conduction?.abs
                   6,
             ),
           ],
-          alpha: r.clock === "fibrillatory"
-            ? 0.08 + 0.92 * Math.max(0, Math.sin(absolute * (0.033 + r.start * 0.001) + r.start - i * 1.9)) ** 4
+          alpha: disordered
+            ? 0.20 + 0.80 * Math.max(0, Math.sin(absolute * (0.033 + r.start * 0.001) + r.start - i * 1.9)) ** 4
             : c.rhythm === "vf"
-            ? (r.clock === "ventricular" ? Math.max(0, Math.sin((c.absolute ?? 0) * .037 + i * 2.3 + r.start)) ** 8 : 0)
+            ? 0
             : c.rhythm === "asystole" || suppressed
             ? 0
             : pulse(
@@ -298,6 +313,7 @@ export class Conduction2D {
     );
     this.routes = new Map();
     for (const route of routes) {
+      const disordered = ["fibrillatory", "vf"].includes(route.clock);
       const group = el("g", { "data-conduction-route": route.id }, this.group);
       const segments = route.points.slice(1).map(() => {
         const attrs = {
@@ -308,22 +324,22 @@ export class Conduction2D {
         return [
           el(
             "path",
-            { ...attrs, stroke: "#c6a529", "stroke-width": 4.5, opacity: route.clock === "fibrillatory" ? 0 : 0.75 },
+            { ...attrs, stroke: disordered ? "#8c5600" : "#c6a529", "stroke-width": disordered ? 8 : 4.5, opacity: disordered ? 0 : 0.75 },
             group,
           ),
           el(
             "path",
-            { ...attrs, stroke: "#ffc928", "stroke-width": 13, opacity: 0 },
+            { ...attrs, stroke: "#ffc928", "stroke-width": disordered ? 18 : 13, opacity: 0 },
             group,
           ),
           el(
             "path",
-            { ...attrs, stroke: "#fff38a", "stroke-width": 3, opacity: 0 },
+            { ...attrs, stroke: "#fff38a", "stroke-width": disordered ? 5.5 : 3, opacity: 0 },
             group,
           ),
         ];
       });
-      this.routes.set(route.id, { group, segments });
+      this.routes.set(route.id, { group, segments, clock: route.clock });
     }
     // CC-59: the ectopic site, a lightning mark with a glow.
     const ectopic = el("g", { "data-conduction-node": "ectopic", display: "none" }, this.group);
@@ -369,6 +385,11 @@ export class Conduction2D {
         const coords = (p) => p.map((v) => v.toFixed(1)).join(",");
         const d = `M${coords(segment.start)}C${coords(segment.controls[0])} ${coords(segment.controls[1])} ${coords(segment.end)}`;
         paths.forEach((path) => path.setAttribute("d", d));
+        const clock = this.routes.get(route.id).clock;
+        const dim = conduction.rhythm === "vf" || conduction.rhythm === "asystole" ||
+          (clock === "atrial" && conduction.fibrillating) ||
+          (conduction.ectopic && clock === "ventricular");
+        paths[0].setAttribute("opacity", ["fibrillatory", "vf"].includes(clock) ? segment.alpha * 0.85 : dim ? 0.10 : 0.75);
         paths[1].setAttribute("opacity", (segment.alpha * 0.25).toFixed(3));
         paths[2].setAttribute("opacity", segment.alpha.toFixed(3));
       });
