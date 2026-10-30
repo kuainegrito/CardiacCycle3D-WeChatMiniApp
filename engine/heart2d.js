@@ -1650,7 +1650,7 @@ export class Heart2DView {
     this.state.vfTime = frame.sample?.conduction?.rhythm === "vf" ? frame.sample.absolute : null;
     this.svg.dataset.rhythm = frame.sample?.conduction?.rhythm ?? "sinus";
     const g = (this.geometry = heart2dGeometry(this.state));
-    this.conductionView.update(frame.sample?.conduction, this.state.s, g.shell);
+    this.conductionView.update(frame.sample?.conduction, this.state.s, g.shell, frame.sample?.absolute);
     this.shell.setAttribute("d", g.shell);
     for (const [id, d] of Object.entries(g.cavities))
       this.cavity[id].setAttribute("d", d);

@@ -185,7 +185,17 @@ const locate = (v, s) => [
 ];
 const pulse = (age) => (age < 0 ? 0 : clamp(1 - age / 100));
 
-export function conduction2dState(conduction, s = {}) {
+// Disconnected short fronts in BOTH atria; no single SA-to-AV sweep.
+// Positions are schematic atrial wall landmarks, not patient activation maps.
+for (const [chamber, paths] of [
+  ["RA", [[[122, 319], [109, 341], [105, 361]], [[98, 387], [99, 408], [104, 429]], [[112, 451], [124, 472], [143, 478]]]],
+  ["LA", [[[345, 276], [366, 263], [388, 254]], [[410, 254], [434, 270], [450, 291]], [[451, 307], [444, 326], [427, 339]]]],
+]) paths.forEach((points, i) => routes.push({
+  id: `af-${chamber}-${i}`, clock: "fibrillatory", start: i * 2.3 + (chamber === "LA" ? 1.7 : 0),
+  points: points.map(([x, y]) => p(x, y, chamber, chamber === "RA" ? -8 : 4, -5)),
+}));
+
+export function conduction2dState(conduction, s = {}, absolute = conduction?.absolute ?? 0) {
   if (!conduction) return null;
   const c = conduction;
   const atrialAge = c.atrialShaderTime;
@@ -214,7 +224,8 @@ export function conduction2dState(conduction, s = {}) {
             : pulse(atrialAge - 55),
     },
     routes: routes
-      .filter((r) => (r.clock !== "accessory" || c.accessory) && (r.clock !== "ectopic" || ectopic))
+      .filter((r) => (r.clock !== "accessory" || c.accessory) && (r.clock !== "ectopic" || ectopic) &&
+        (r.clock !== "fibrillatory" || (c.fibrillating && !["vf", "asystole"].includes(c.rhythm))))
       .map((r) => {
         const points = r.points.map((v) => locate(v, s));
         const age =
@@ -250,7 +261,9 @@ export function conduction2dState(conduction, s = {}) {
                   6,
             ),
           ],
-          alpha: c.rhythm === "vf"
+          alpha: r.clock === "fibrillatory"
+            ? 0.08 + 0.92 * Math.max(0, Math.sin(absolute * (0.033 + r.start * 0.001) + r.start - i * 1.9)) ** 4
+            : c.rhythm === "vf"
             ? (r.clock === "ventricular" ? Math.max(0, Math.sin((c.absolute ?? 0) * .037 + i * 2.3 + r.start)) ** 8 : 0)
             : c.rhythm === "asystole" || suppressed
             ? 0
@@ -295,7 +308,7 @@ export class Conduction2D {
         return [
           el(
             "path",
-            { ...attrs, stroke: "#c6a529", "stroke-width": 4.5, opacity: 0.75 },
+            { ...attrs, stroke: "#c6a529", "stroke-width": 4.5, opacity: route.clock === "fibrillatory" ? 0 : 0.75 },
             group,
           ),
           el(
@@ -342,9 +355,9 @@ export class Conduction2D {
       ];
     }
   }
-  update(conduction, s, shell) {
+  update(conduction, s, shell, absolute) {
     if (shell) this.clip.setAttribute("d", shell);
-    const state = conduction2dState(conduction, s);
+    const state = conduction2dState(conduction, s, absolute);
     this.group.setAttribute("display", state ? "inline" : "none");
     if (!state) return;
     const visible = new Set(state.routes.map((r) => r.id));

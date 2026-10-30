@@ -47,4 +47,27 @@ assert.equal(u.uVfOn.value, 0, "off in the post-shock pause");
 const normal = await lab.model("normal");
 assert.equal(step(normal, 300, 2).conduction.rhythm ?? "sinus", "sinus");
 assert.equal(u.uVfOn.value, 0, "off in sinus rhythm");
+// AF is electrical disorder in the atria, with the ventricular conduction
+// layer retained. This exercises the actual generated mini-program bundle.
+const af = await lab.model("af");
+const afSample = step(af, 145, 2);
+assert.ok(view.afLayer, "atrial fibrillation layer is built in the bundle");
+const au = view.afLayer.uniforms;
+assert.equal(au.uAfOn.value, 1);
+assert.equal(au.uAfTime.value, afSample.absolute / 1000);
+assert.equal(u.uVfOn.value, 0, "AF does not turn on ventricular disorder");
+assert.equal(view.views.conduction.layer.uniforms.uCondEnabled.value, 1);
+assert.equal(view.views.conduction.layer.uniforms.uCondFibrillating.value, 1);
+const afTime = au.uAfTime.value;
+step(af, 226, 2);
+assert.notEqual(au.uAfTime.value, afTime);
+step(af, 145, 2);
+assert.equal(au.uAfTime.value, afTime, "backward scrub is deterministic");
+view.preset = "anatomy";
+step(af, 145, 2);
+assert.equal(au.uAfOn.value, 0, "AF fronts are restricted to the conduction view");
+view.preset = "conduction";
+step(normal, 300, 2);
+assert.equal(au.uAfOn.value, 0, "AF fronts clear when leaving AF");
 console.log(`Bundled fibrillation layer: on in VF (wavelets in the conduction view, ordered conduction off), off after the shock and in sinus rhythm`);
+console.log("Bundled AF layer: atrial fronts with preserved ventricular conduction, sampled time, scrub, view and scenario reset passed");
